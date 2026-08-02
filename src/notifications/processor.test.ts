@@ -61,6 +61,7 @@ describe("processEvent", () => {
       notifier,
       logger: createSilentLogger(),
       kanBaseUrl: TEST_KAN_BASE_URL,
+      groupMemberMentions: true,
     };
   }
 

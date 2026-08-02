@@ -16,6 +16,7 @@ describe("loadConfig", () => {
     expect(config.host).toBe("0.0.0.0");
     expect(config.adminTelegramIds).toEqual([]);
     expect(config.autoApproveLinks).toBe(false);
+    expect(config.groupMemberMentions).toBe(true);
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
     expect(config.eventLogRetentionDays).toBe(30);
     expect(config.logLevel).toBe("info");
@@ -41,6 +42,10 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ ...validEnv, AUTO_APPROVE_LINKS: "true" }).autoApproveLinks,
     ).toBe(true);
+    expect(
+      loadConfig({ ...validEnv, GROUP_MEMBER_MENTIONS: "false" })
+        .groupMemberMentions,
+    ).toBe(false);
   });
 
   it("rejects a missing bot token", () => {

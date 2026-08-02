@@ -19,7 +19,7 @@ flowchart LR
 1. In Kan, a workspace admin creates a webhook (Settings → Webhooks) pointing at this bot's `/webhook` endpoint with a shared secret.
 2. Kan signs every delivery with `X-Webhook-Signature` (hex HMAC-SHA256 of the raw JSON body). The bot verifies the signature and the signed timestamp, stores the event in PostgreSQL, and acknowledges immediately with `202`.
 3. Notifications are then delivered asynchronously, in event order:
-   - **Group notifications** to every subscribed chat whose event/board filters match.
+   - **Group notifications** to every subscribed chat whose event/board filters match. When the affected member has a linked Telegram account, the message mentions it (`@username` or a profile link) instead of the Kan (OIDC) name — disable with `GROUP_MEMBER_MENTIONS=false`.
    - **Personal DMs** to the affected member on `card.member.added` / `card.member.removed`, looked up through the OIDC email → Telegram mapping.
 
 ### Supported events
@@ -38,7 +38,9 @@ Unknown event types from newer Kan versions are acknowledged and ignored, so the
    WEBHOOK_SECRET=<openssl rand -hex 32>
    KAN_BASE_URL=https://kan.example.com
    ADMIN_TELEGRAM_IDS=11111111
-   POSTGRES_PASSWORD=<a real password>
+   # Optional: point the bot at an external PostgreSQL instead of the
+   # bundled one (which is only reachable inside the compose network)
+   # DATABASE_URL=postgres://user:password@db.example.com:5432/kan_tg_notifier
    ```
 
 3. Start it:
@@ -88,6 +90,7 @@ Kan webhooks identify affected members by the email of their (OIDC) user account
 | `PORT` | no | `8080` | HTTP port |
 | `ADMIN_TELEGRAM_IDS` | no | empty | Comma-separated Telegram user IDs of bot admins |
 | `AUTO_APPROVE_LINKS` | no | `false` | Approve `/link` requests without admin review |
+| `GROUP_MEMBER_MENTIONS` | no | `true` | Mention linked members' Telegram accounts in group messages instead of their OIDC names |
 | `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | no | `600` | Reject payloads whose signed timestamp deviates more than this from server time (replay protection); `0` disables |
 | `EVENT_LOG_RETENTION_DAYS` | no | `30` | Delete event log entries older than this; `0` keeps them forever |
 | `LOG_LEVEL` | no | `info` | pino log level |

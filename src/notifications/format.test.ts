@@ -138,6 +138,27 @@ describe("formatEventMessage", () => {
     expect(text).toContain("b***@corp.com");
   });
 
+  it("mentions the linked member by @username instead of the OIDC name", () => {
+    const payload = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const text = formatEventMessage(payload, TEST_KAN_BASE_URL, {
+      memberMention: { telegramUserId: 555, telegramUsername: "bob_tg" },
+    });
+    expect(text).toContain("assigned @bob_tg to");
+    expect(text).not.toContain("assigned Bob to");
+  });
+
+  it("falls back to a tg://user text mention when the member has no username", () => {
+    const payload = buildPayload("card.member.removed", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const text = formatEventMessage(payload, TEST_KAN_BASE_URL, {
+      memberMention: { telegramUserId: 555, telegramUsername: null },
+    });
+    expect(text).toContain('<a href="tg://user?id=555">Bob</a>');
+  });
+
   it("renders card.moved with the target list", () => {
     const text = formatEventMessage(buildPayload("card.moved"), TEST_KAN_BASE_URL);
     expect(text).toContain("moved");

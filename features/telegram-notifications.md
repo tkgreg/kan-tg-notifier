@@ -7,7 +7,7 @@ Turns stored webhook events into Telegram messages.
 For each event:
 
 1. **Personal DM** — on `card.member.added` / `card.member.removed`, if the affected member's email has an **approved** mapping (see `user-mapping.md`), the mapped Telegram user gets a personalized message ("Alice assigned you to …").
-2. **Group messages** — every chat subscription whose event filter and board filter match gets the generic message.
+2. **Group messages** — every chat subscription whose event filter and board filter match gets the generic message. When the affected member has an approved mapping and `GROUP_MEMBER_MENTIONS` is on (default), the message mentions their concrete Telegram account — `@username`, or a `tg://user?id=…` text mention when they have no public username — instead of the Kan (OIDC) display name.
 3. A chat never receives both: the personal DM replaces the generic message for that chat ID.
 
 ## Formatting (`src/notifications/format.ts`, pure)

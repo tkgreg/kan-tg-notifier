@@ -62,6 +62,37 @@ describe("routeEvent", () => {
     expect(notifications[0]!.text).toContain("assigned you to");
   });
 
+  it("mentions the linked member's Telegram account in group messages", () => {
+    const payload = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const notifications = routeEvent(
+      payload,
+      [buildSubscription({ chatId: -100 })],
+      [buildMapping({ telegramUserId: 555, telegramUsername: "bob_tg" })],
+      TEST_KAN_BASE_URL,
+    );
+    const group = notifications.find((n) => n.chatId === -100);
+    expect(group?.text).toContain("@bob_tg");
+    expect(group?.text).not.toContain("assigned Bob to");
+  });
+
+  it("keeps the OIDC name in group messages when mentions are disabled", () => {
+    const payload = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const notifications = routeEvent(
+      payload,
+      [buildSubscription({ chatId: -100 })],
+      [buildMapping({ telegramUserId: 555, telegramUsername: "bob_tg" })],
+      TEST_KAN_BASE_URL,
+      { mentionLinkedMembers: false },
+    );
+    const group = notifications.find((n) => n.chatId === -100);
+    expect(group?.text).toContain("assigned Bob to");
+    expect(group?.text).not.toContain("@bob_tg");
+  });
+
   it("does not double-send when the member's own chat is also subscribed", () => {
     const payload = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },

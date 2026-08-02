@@ -107,6 +107,7 @@ async function main(): Promise<void> {
     notifier,
     logger: logger.child({ component: "processor" }),
     kanBaseUrl: config.kanBaseUrl,
+    groupMemberMentions: config.groupMemberMentions,
   };
   const queue = createSerialQueue((error) => {
     logger.error(

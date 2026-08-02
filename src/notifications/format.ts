@@ -2,6 +2,20 @@ import type { KanChanges, KanWebhookPayload } from "../kan/events.js";
 
 const MAX_TEXT_PREVIEW_LENGTH = 300;
 
+/**
+ * Telegram identity of the affected member, resolved through an approved
+ * OIDC → Telegram mapping. When present, group messages mention the
+ * concrete Telegram account instead of showing the Kan (OIDC) name.
+ */
+export interface MemberMention {
+  telegramUserId: number;
+  telegramUsername: string | null;
+}
+
+export interface FormatOptions {
+  memberMention?: MemberMention;
+}
+
 export function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -126,7 +140,20 @@ export function formatChanges(changes: KanChanges): string[] {
   return lines;
 }
 
-function memberDisplayName(payload: KanWebhookPayload): string {
+function memberDisplayName(
+  payload: KanWebhookPayload,
+  mention: MemberMention | undefined,
+): string {
+  if (mention) {
+    // An @username notifies the account when it is present in the chat;
+    // the tg://user text mention works even without a public username.
+    if (mention.telegramUsername) {
+      return `@${escapeHtml(mention.telegramUsername)}`;
+    }
+    const label = payload.data.member?.name ?? "a member";
+    return `<a href="tg://user?id=${mention.telegramUserId}">${escapeHtml(label)}</a>`;
+  }
+
   const { member } = payload.data;
   if (!member) return "a member";
   if (member.name) return escapeHtml(member.name);
@@ -136,7 +163,11 @@ function memberDisplayName(payload: KanWebhookPayload): string {
   return "a member";
 }
 
-function headerLine(payload: KanWebhookPayload, kanBaseUrl: string): string {
+function headerLine(
+  payload: KanWebhookPayload,
+  kanBaseUrl: string,
+  options: FormatOptions,
+): string {
   const actor = `<b>${actorName(payload)}</b>`;
   const card = cardLink(payload, kanBaseUrl);
   const list = payload.data.list
@@ -163,9 +194,9 @@ function headerLine(payload: KanWebhookPayload, kanBaseUrl: string): string {
     case "card.label.removed":
       return `🏷 ${actor} removed label ${labelBadge(payload)} from ${card}`;
     case "card.member.added":
-      return `👤 ${actor} assigned ${memberDisplayName(payload)} to ${card}`;
+      return `👤 ${actor} assigned ${memberDisplayName(payload, options.memberMention)} to ${card}`;
     case "card.member.removed":
-      return `👤 ${actor} removed ${memberDisplayName(payload)} from ${card}`;
+      return `👤 ${actor} removed ${memberDisplayName(payload, options.memberMention)} from ${card}`;
   }
 }
 
@@ -181,8 +212,9 @@ function labelBadge(payload: KanWebhookPayload): string {
 export function formatEventMessage(
   payload: KanWebhookPayload,
   kanBaseUrl: string,
+  options: FormatOptions = {},
 ): string {
-  const lines: string[] = [headerLine(payload, kanBaseUrl)];
+  const lines: string[] = [headerLine(payload, kanBaseUrl, options)];
 
   const context = contextLine(payload);
   if (context) lines.push(context);
