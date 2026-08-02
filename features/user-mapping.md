@@ -8,6 +8,7 @@ Maps Kan (OIDC) user accounts, identified by email, to Telegram accounts. Kan we
 2. The mapping is stored as `pending` (table `user_mappings`, unique per Telegram user and per email).
 3. Admins (from `ADMIN_TELEGRAM_IDS`) are notified and run `/approve alice@corp.com` or `/reject alice@corp.com`. With `AUTO_APPROVE_LINKS=true`, or when the requester is an admin, the link is approved immediately.
 4. Approved users receive personal DMs when they are assigned to or removed from a card. Because the user opened the DM to send `/link`, the bot is always able to message them back.
+5. In group notifications, approved users are shown as their concrete Telegram account (mention) instead of their Kan (OIDC) name, unless `GROUP_MEMBER_MENTIONS=false`.
 
 ## Security decisions
 

@@ -18,6 +18,8 @@ export interface ProcessorDeps {
   notifier: Notifier;
   logger: Logger;
   kanBaseUrl: string;
+  /** Mention linked members' Telegram accounts in group messages. */
+  groupMemberMentions: boolean;
 }
 
 /**
@@ -80,6 +82,7 @@ export async function processEvent(
     subscriptions,
     memberMapping ? [memberMapping] : [],
     kanBaseUrl,
+    { mentionLinkedMembers: deps.groupMemberMentions },
   );
 
   let sent = 0;

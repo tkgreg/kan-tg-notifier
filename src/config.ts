@@ -28,6 +28,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   ADMIN_TELEGRAM_IDS: adminIdsFromString.default(""),
   AUTO_APPROVE_LINKS: booleanFromString.default("false"),
+  GROUP_MEMBER_MENTIONS: booleanFromString.default("true"),
   WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: z.coerce
     .number()
     .int()
@@ -48,6 +49,7 @@ export interface AppConfig {
   port: number;
   adminTelegramIds: readonly number[];
   autoApproveLinks: boolean;
+  groupMemberMentions: boolean;
   webhookTimestampToleranceSeconds: number;
   eventLogRetentionDays: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
@@ -79,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     port: parsed.data.PORT,
     adminTelegramIds: parsed.data.ADMIN_TELEGRAM_IDS,
     autoApproveLinks: parsed.data.AUTO_APPROVE_LINKS,
+    groupMemberMentions: parsed.data.GROUP_MEMBER_MENTIONS,
     webhookTimestampToleranceSeconds:
       parsed.data.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
     eventLogRetentionDays: parsed.data.EVENT_LOG_RETENTION_DAYS,

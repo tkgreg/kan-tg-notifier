@@ -1,5 +1,6 @@
 import type { ChatSubscription, UserMapping } from "../db/schema.js";
 import type { KanWebhookPayload } from "../kan/events.js";
+import type { FormatOptions } from "./format.js";
 import { normalizeEmail } from "../db/repository/mapping.repo.js";
 import { formatEventMessage, formatMemberDirectMessage } from "./format.js";
 
@@ -7,6 +8,14 @@ export interface Notification {
   chatId: number;
   text: string;
   kind: "group" | "direct";
+}
+
+export interface RoutingOptions {
+  /**
+   * Replace the affected member's Kan (OIDC) name with a mention of
+   * their linked Telegram account in group messages.
+   */
+  mentionLinkedMembers: boolean;
 }
 
 export function matchesSubscription(
@@ -46,7 +55,9 @@ function findAffectedMemberMapping(
  *
  * Rules:
  * - Every subscription matching the event and board filters gets the
- *   generic group message.
+ *   generic group message. When the affected member has an approved
+ *   mapping and mentionLinkedMembers is on, the group message mentions
+ *   their concrete Telegram account instead of the Kan (OIDC) name.
  * - On card.member.added / card.member.removed, the affected member
  *   (looked up by their mapped Kan email) gets a personalized direct
  *   message instead of — never in addition to — the generic one.
@@ -56,6 +67,7 @@ export function routeEvent(
   subscriptions: readonly ChatSubscription[],
   approvedMappings: readonly UserMapping[],
   kanBaseUrl: string,
+  options: RoutingOptions = { mentionLinkedMembers: true },
 ): Notification[] {
   const notifications: Notification[] = [];
   const directChatIds = new Set<number>();
@@ -70,7 +82,16 @@ export function routeEvent(
     directChatIds.add(memberMapping.telegramUserId);
   }
 
-  const groupText = formatEventMessage(payload, kanBaseUrl);
+  const formatOptions: FormatOptions =
+    options.mentionLinkedMembers && memberMapping
+      ? {
+          memberMention: {
+            telegramUserId: memberMapping.telegramUserId,
+            telegramUsername: memberMapping.telegramUsername,
+          },
+        }
+      : {};
+  const groupText = formatEventMessage(payload, kanBaseUrl, formatOptions);
   for (const subscription of subscriptions) {
     if (directChatIds.has(subscription.chatId)) continue;
     if (!matchesSubscription(subscription, payload)) continue;
