@@ -15,8 +15,15 @@ export interface DbConnection {
   close: () => Promise<void>;
 }
 
-export function createDbConnection(databaseUrl: string): DbConnection {
+export function createDbConnection(
+  databaseUrl: string,
+  onIdleClientError: (error: Error) => void,
+): DbConnection {
   const pool = new pg.Pool({ connectionString: databaseUrl });
+  // Without a listener, an error on an idle pooled connection (e.g. a
+  // PostgreSQL restart) is an unhandled 'error' event and kills Node.
+  // The pool already discards the broken client; reporting is enough.
+  pool.on("error", onIdleClientError);
   const db = drizzle(pool, { schema });
 
   return {

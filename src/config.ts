@@ -33,6 +33,7 @@ const envSchema = z.object({
     .int()
     .min(0)
     .default(600),
+  EVENT_LOG_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
@@ -48,6 +49,7 @@ export interface AppConfig {
   adminTelegramIds: readonly number[];
   autoApproveLinks: boolean;
   webhookTimestampToleranceSeconds: number;
+  eventLogRetentionDays: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 }
 
@@ -79,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     autoApproveLinks: parsed.data.AUTO_APPROVE_LINKS,
     webhookTimestampToleranceSeconds:
       parsed.data.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
+    eventLogRetentionDays: parsed.data.EVENT_LOG_RETENTION_DAYS,
     logLevel: parsed.data.LOG_LEVEL,
   };
 }

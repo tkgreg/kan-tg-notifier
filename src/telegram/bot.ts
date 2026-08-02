@@ -1,8 +1,10 @@
+import type { Context } from "grammy";
 import { Bot } from "grammy";
 
 import type { AppConfig } from "../config.js";
 import type { DbClient } from "../db/client.js";
 import type { Logger } from "../logger.js";
+import * as subscriptionRepo from "../db/repository/subscription.repo.js";
 import {
   handleApprove,
   handleMappings,
@@ -31,27 +33,75 @@ export function createBot(deps: BotDeps): Bot {
     deps.logger.error(
       {
         updateId: error.ctx.update.update_id,
-        error: error.error instanceof Error ? error.error.message : String(error.error),
+        error:
+          error.error instanceof Error
+            ? error.error.message
+            : String(error.error),
       },
       "Unhandled error in bot update handler",
     );
   });
 
-  bot.command(["start", "help"], (ctx) => handleHelp(ctx));
+  // Command handlers must never fail silently: log and tell the user.
+  const safely =
+    (handler: (ctx: Context) => Promise<void>) =>
+    async (ctx: Context): Promise<void> => {
+      try {
+        await handler(ctx);
+      } catch (error) {
+        deps.logger.error(
+          {
+            updateId: ctx.update.update_id,
+            chatId: ctx.chat?.id,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Command handler failed",
+        );
+        try {
+          await ctx.reply("Something went wrong — please try again.");
+        } catch {
+          // The chat may be unreachable; the error is already logged.
+        }
+      }
+    };
 
-  bot.command("link", (ctx) => handleLink(deps, ctx));
-  bot.command("unlink", (ctx) => handleUnlink(deps, ctx));
-  bot.command("whoami", (ctx) => handleWhoami(deps, ctx));
+  bot.command(["start", "help"], safely((ctx) => handleHelp(ctx)));
 
-  bot.command("subscribe", (ctx) => handleSubscribe(deps, ctx));
-  bot.command("unsubscribe", (ctx) => handleUnsubscribe(deps, ctx));
-  bot.command("status", (ctx) => handleStatus(deps, ctx));
-  bot.command("events", (ctx) => handleEvents(ctx));
-  bot.command("boards", (ctx) => handleBoards(deps, ctx));
+  bot.command("link", safely((ctx) => handleLink(deps, ctx)));
+  bot.command("unlink", safely((ctx) => handleUnlink(deps, ctx)));
+  bot.command("whoami", safely((ctx) => handleWhoami(deps, ctx)));
 
-  bot.command("approve", (ctx) => handleApprove(deps, ctx));
-  bot.command("reject", (ctx) => handleReject(deps, ctx));
-  bot.command("mappings", (ctx) => handleMappings(deps, ctx));
+  bot.command("subscribe", safely((ctx) => handleSubscribe(deps, ctx)));
+  bot.command("unsubscribe", safely((ctx) => handleUnsubscribe(deps, ctx)));
+  bot.command("status", safely((ctx) => handleStatus(deps, ctx)));
+  bot.command("events", safely((ctx) => handleEvents(ctx)));
+  bot.command("boards", safely((ctx) => handleBoards(deps, ctx)));
+
+  bot.command("approve", safely((ctx) => handleApprove(deps, ctx)));
+  bot.command("reject", safely((ctx) => handleReject(deps, ctx)));
+  bot.command("mappings", safely((ctx) => handleMappings(deps, ctx)));
+
+  // Keep the subscription alive when Telegram upgrades a basic group to
+  // a supergroup: the chat id changes and the old one stops working.
+  bot.on("message:migrate_to_chat_id", async (ctx) => {
+    const newChatId = ctx.msg.migrate_to_chat_id;
+    try {
+      await subscriptionRepo.migrateChatId(deps.db, ctx.chat.id, newChatId);
+      deps.logger.info(
+        { oldChatId: ctx.chat.id, newChatId },
+        "Chat migrated to supergroup; subscription moved",
+      );
+    } catch (error) {
+      deps.logger.error(
+        {
+          oldChatId: ctx.chat.id,
+          newChatId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to move subscription after chat migration",
+      );
+    }
+  });
 
   return bot;
 }

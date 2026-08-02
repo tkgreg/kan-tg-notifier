@@ -49,7 +49,7 @@ Unknown event types from newer Kan versions are acknowledged and ignored, so the
 
 4. Expose port `8080` through your HTTPS reverse proxy. Kan only accepts `https://` webhook URLs on public hosts, so the endpoint must be reachable as e.g. `https://kan-bot.example.com/webhook`.
 5. In Kan: **Settings → Webhooks → Add webhook**, URL `https://kan-bot.example.com/webhook`, secret = your `WEBHOOK_SECRET`, and select the events you want.
-6. Add the bot to a group (or open a DM with it) and send `/subscribe`.
+6. DM the bot `/link your-oidc-email@example.com` and approve it with `/approve` (as an admin). Then add the bot to a group (or stay in the DM) and send `/subscribe`.
 
 Database migrations run automatically on startup.
 
@@ -70,7 +70,7 @@ Database migrations run automatically on startup.
 | `/reject email` | DM, admin | Reject/remove a link |
 | `/mappings` | DM, admin | List all account links |
 
-In groups, only chat administrators (and global admins from `ADMIN_TELEGRAM_IDS`) can manage the subscription. Board public IDs are the 12-character IDs from your Kan board URLs.
+Managing a subscription requires two things: chat-level rights (in groups, being a chat administrator — anonymous admins must briefly disable *Remain anonymous*) and workspace-level authorization (an **approved account link** via `/link`, or being listed in `ADMIN_TELEGRAM_IDS`). The second check stops strangers from subscribing themselves — or a group they created — to your workspace's event stream. Board public IDs are the 12-character IDs from your Kan board URLs.
 
 ### OIDC user mapping
 
@@ -88,15 +88,17 @@ Kan webhooks identify affected members by the email of their (OIDC) user account
 | `PORT` | no | `8080` | HTTP port |
 | `ADMIN_TELEGRAM_IDS` | no | empty | Comma-separated Telegram user IDs of bot admins |
 | `AUTO_APPROVE_LINKS` | no | `false` | Approve `/link` requests without admin review |
-| `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | no | `600` | Reject payloads whose signed timestamp is older (replay protection); `0` disables |
+| `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | no | `600` | Reject payloads whose signed timestamp deviates more than this from server time (replay protection); `0` disables |
+| `EVENT_LOG_RETENTION_DAYS` | no | `30` | Delete event log entries older than this; `0` keeps them forever |
 | `LOG_LEVEL` | no | `info` | pino log level |
 
 ## Security notes
 
 - Webhook deliveries are authenticated with a constant-time HMAC-SHA256 check over the raw body; unsigned or wrongly signed requests get `401`.
-- The signed payload timestamp is checked against `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` to limit replays.
-- `/link` requests require admin approval by default (see above).
-- Admin commands and mapping listings only work in DMs so email addresses are never posted into groups.
+- The signed payload timestamp is checked against `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS`, and replayed deliveries (identical signed bytes) are detected by a body-hash and acknowledged without effect.
+- Subscribing a chat requires an approved account link or bot-admin status — Telegram-side group ownership alone grants nothing.
+- `/link` requests require admin approval by default (see above), and `/link` replies do not reveal whether an email is already registered.
+- Admin commands and mapping listings only work in DMs; group notifications mask email addresses (`b***@corp.com`) when a member has no display name.
 - All user-provided content is HTML-escaped before it is sent to Telegram.
 
 ## Development

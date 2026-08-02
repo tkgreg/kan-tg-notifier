@@ -20,6 +20,38 @@ export interface ProcessorDeps {
   kanBaseUrl: string;
 }
 
+/**
+ * A basic group was upgraded to a supergroup while we were sending:
+ * point the subscription at the new chat id and retry there once.
+ */
+async function redeliverToMigratedChat(
+  deps: ProcessorDeps,
+  text: string,
+  oldChatId: number,
+  newChatId: number,
+): Promise<boolean> {
+  const { db, notifier, logger } = deps;
+  try {
+    await subscriptionRepo.migrateChatId(db, oldChatId, newChatId);
+    await notifier.sendHtmlMessage(newChatId, text);
+    logger.info(
+      { oldChatId, newChatId },
+      "Chat migrated to supergroup; subscription updated and message redelivered",
+    );
+    return true;
+  } catch (error) {
+    logger.error(
+      {
+        oldChatId,
+        newChatId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "Failed to redeliver to migrated chat",
+    );
+    return false;
+  }
+}
+
 async function loadAffectedMemberMapping(
   db: DbClient,
   payload: KanWebhookPayload,
@@ -58,6 +90,26 @@ export async function processEvent(
       await notifier.sendHtmlMessage(notification.chatId, notification.text);
       sent += 1;
     } catch (error) {
+      if (
+        error instanceof NotificationDeliveryError &&
+        error.migratedToChatId !== undefined
+      ) {
+        const delivered = await redeliverToMigratedChat(
+          deps,
+          notification.text,
+          notification.chatId,
+          error.migratedToChatId,
+        );
+        if (delivered) {
+          sent += 1;
+          continue;
+        }
+        failures.push(
+          `Chat ${notification.chatId} migrated to ${error.migratedToChatId} but redelivery failed`,
+        );
+        continue;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       failures.push(message);
       logger.error(
@@ -76,11 +128,27 @@ export async function processEvent(
         error.unreachableChat &&
         notification.kind === "group"
       ) {
-        await subscriptionRepo.deleteByChatId(db, notification.chatId);
-        logger.warn(
-          { chatId: notification.chatId },
-          "Removed subscription for unreachable chat",
-        );
+        // Cleanup is best-effort: a DB error here must not abort
+        // delivery to the remaining chats.
+        try {
+          await subscriptionRepo.deleteByChatId(db, notification.chatId);
+          logger.warn(
+            { chatId: notification.chatId },
+            "Removed subscription for unreachable chat",
+          );
+        } catch (cleanupError) {
+          const cleanupMessage =
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError);
+          failures.push(
+            `Failed to remove subscription for unreachable chat ${notification.chatId}: ${cleanupMessage}`,
+          );
+          logger.error(
+            { chatId: notification.chatId, error: cleanupMessage },
+            "Failed to remove subscription for unreachable chat",
+          );
+        }
       }
     }
   }

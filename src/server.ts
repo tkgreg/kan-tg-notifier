@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
 
@@ -10,12 +11,27 @@ import {
 } from "./kan/events.js";
 import { isTimestampFresh, verifySignature } from "./kan/signature.js";
 
+/**
+ * Kan imposes no length limit on card descriptions or comments, and a
+ * comment edit carries the text three times (comment.text, changes.from,
+ * changes.to), so Fastify's default 1 MiB limit could reject legitimate
+ * deliveries with 413.
+ */
+const BODY_LIMIT_BYTES = 10 * 1024 * 1024;
+
 export interface WebhookServerDeps {
   webhookSecret: string;
   timestampToleranceSeconds: number;
   logger: Logger;
-  /** Persist the event and schedule notification delivery. Must be fast. */
-  onEvent: (payload: KanWebhookPayload) => Promise<void>;
+  /**
+   * Persist the event and schedule notification delivery. Must be fast.
+   * payloadHash is the SHA-256 hex of the raw body; returns "duplicate"
+   * when a delivery with the same hash was already stored.
+   */
+  onEvent: (
+    payload: KanWebhookPayload,
+    payloadHash: string,
+  ) => Promise<"accepted" | "duplicate">;
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -31,7 +47,7 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
  * are actually delivered.
  */
 export function createWebhookServer(deps: WebhookServerDeps): FastifyInstance {
-  const server = Fastify({ logger: false });
+  const server = Fastify({ logger: false, bodyLimit: BODY_LIMIT_BYTES });
 
   // Keep the raw body: the signature covers the exact bytes on the wire.
   server.addContentTypeParser(
@@ -104,7 +120,15 @@ export function createWebhookServer(deps: WebhookServerDeps): FastifyInstance {
       return reply.code(401).send({ error: "Stale webhook timestamp" });
     }
 
-    await deps.onEvent(payload);
+    const payloadHash = createHash("sha256").update(rawBody).digest("hex");
+    const outcome = await deps.onEvent(payload, payloadHash);
+    if (outcome === "duplicate") {
+      deps.logger.info(
+        { event: payload.event, payloadHash },
+        "Ignoring replayed or duplicated delivery",
+      );
+      return reply.code(202).send({ status: "duplicate" });
+    }
     return reply.code(202).send({ status: "accepted" });
   });
 

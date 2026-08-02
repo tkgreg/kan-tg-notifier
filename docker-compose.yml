@@ -2,6 +2,9 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    # Allow queued notifications (incl. Telegram flood-wait retries) to
+    # drain before the container is killed.
+    stop_grace_period: 90s
     depends_on:
       postgres:
         condition: service_healthy
@@ -12,6 +15,8 @@ services:
       KAN_BASE_URL: ${KAN_BASE_URL:?set KAN_BASE_URL in .env}
       ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
       AUTO_APPROVE_LINKS: ${AUTO_APPROVE_LINKS:-false}
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: ${WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:-600}
+      EVENT_LOG_RETENTION_DAYS: ${EVENT_LOG_RETENTION_DAYS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${PORT:-8080}:8080"

@@ -69,6 +69,27 @@ export async function setBoardFilter(
   return rows[0];
 }
 
+/**
+ * Move a subscription to a new chat id after Telegram migrates a basic
+ * group to a supergroup. If the new chat already has its own
+ * subscription, the stale row for the old id is dropped instead.
+ */
+export async function migrateChatId(
+  db: DbClient,
+  oldChatId: number,
+  newChatId: number,
+): Promise<void> {
+  const existingNew = await getByChatId(db, newChatId);
+  if (existingNew) {
+    await deleteByChatId(db, oldChatId);
+    return;
+  }
+  await db
+    .update(chatSubscriptions)
+    .set({ chatId: newChatId, chatType: "supergroup", updatedAt: new Date() })
+    .where(eq(chatSubscriptions.chatId, oldChatId));
+}
+
 export async function deleteByChatId(
   db: DbClient,
   chatId: number,

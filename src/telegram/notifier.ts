@@ -12,6 +12,8 @@ export class NotificationDeliveryError extends Error {
   readonly attempts: number;
   /** True when Telegram rejected the chat permanently (403: blocked/kicked). */
   readonly unreachableChat: boolean;
+  /** Set when the group was migrated to a supergroup with this new chat id. */
+  readonly migratedToChatId: number | undefined;
 
   constructor(
     message: string,
@@ -19,6 +21,7 @@ export class NotificationDeliveryError extends Error {
       chatId: number;
       attempts: number;
       unreachableChat: boolean;
+      migratedToChatId?: number;
       cause?: unknown;
     },
   ) {
@@ -27,6 +30,7 @@ export class NotificationDeliveryError extends Error {
     this.chatId = options.chatId;
     this.attempts = options.attempts;
     this.unreachableChat = options.unreachableChat;
+    this.migratedToChatId = options.migratedToChatId;
   }
 }
 
@@ -94,6 +98,24 @@ export class TelegramNotifier {
         return;
       } catch (error) {
         lastError = error;
+
+        const migratedToChatId =
+          error instanceof GrammyError
+            ? error.parameters.migrate_to_chat_id
+            : undefined;
+        if (migratedToChatId !== undefined) {
+          throw new NotificationDeliveryError(
+            `Chat ${chatId} was migrated to supergroup ${migratedToChatId}`,
+            {
+              chatId,
+              attempts: attempt,
+              unreachableChat: false,
+              migratedToChatId,
+              cause: error,
+            },
+          );
+        }
+
         const decision = decideRetry(error, attempt);
 
         if (!decision.retry || attempt === MAX_ATTEMPTS) {

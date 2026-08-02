@@ -16,6 +16,7 @@ CREATE TABLE "event_log" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"event" varchar(64) NOT NULL,
 	"payload" jsonb NOT NULL,
+	"payload_hash" varchar(64) NOT NULL,
 	"status" varchar(16) DEFAULT 'received' NOT NULL,
 	"notifications_sent" integer DEFAULT 0 NOT NULL,
 	"error" text,
@@ -37,4 +38,5 @@ CREATE TABLE "user_mappings" (
 );
 --> statement-breakpoint
 CREATE INDEX "event_log_status_idx" ON "event_log" USING btree ("status");--> statement-breakpoint
+CREATE UNIQUE INDEX "event_log_payload_hash_idx" ON "event_log" USING btree ("payload_hash");--> statement-breakpoint
 CREATE INDEX "user_mappings_status_idx" ON "user_mappings" USING btree ("status");

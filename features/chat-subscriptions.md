@@ -17,7 +17,10 @@ Lets a Telegram chat (group, supergroup or private chat) receive Kan.bn notifica
 
 ## Rules
 
-- In groups, only Telegram chat administrators or global bot admins may manage the subscription (checked via `getChatMember`). In private chats the user manages their own subscription. Channels are not supported.
+- Two independent checks gate every management command:
+  1. **Chat-level rights** — in groups, the sender must be a Telegram chat administrator (checked via `getChatMember`; messages posted anonymously as the group count as admin) or a global bot admin. In private chats the user manages their own subscription. Channels are not supported.
+  2. **Workspace-level authorization** — the sender must have an **approved** account link (see `user-mapping.md`) or be in `ADMIN_TELEGRAM_IDS`. Without this, any stranger could DM the bot (or add it to their own group) and receive the whole workspace event stream. Anonymous admins cannot be identified, so they must briefly disable *Remain anonymous* (or ask a bot admin).
 - Re-running `/subscribe` updates the event filter but **preserves** the board filter.
 - `allEvents=true` (the `/subscribe` default) also covers event types added by future Kan versions once the bot supports them.
 - If Telegram reports the chat as unreachable during delivery (bot kicked/blocked, HTTP 403), the subscription is deleted automatically.
+- When a basic group is upgraded to a supergroup, Telegram changes the chat id; the bot follows the `migrate_to_chat_id` service message (and the corresponding send error) and moves the subscription to the new id, redelivering the in-flight message.

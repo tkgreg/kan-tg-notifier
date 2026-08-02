@@ -1,23 +1,25 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, lt } from "drizzle-orm";
 
 import type { KanWebhookPayload } from "../../kan/events.js";
 import type { DbClient } from "../client.js";
+import type { EventLogEntry } from "../schema.js";
 import { eventLog } from "../schema.js";
 
+/**
+ * Store a received event. Returns undefined when a delivery with the same
+ * raw-body hash was already stored (replayed or duplicated request).
+ */
 export async function insertReceived(
   db: DbClient,
   payload: KanWebhookPayload,
-): Promise<number> {
+  payloadHash: string,
+): Promise<number | undefined> {
   const rows = await db
     .insert(eventLog)
-    .values({ event: payload.event, payload })
+    .values({ event: payload.event, payload, payloadHash })
+    .onConflictDoNothing({ target: eventLog.payloadHash })
     .returning({ id: eventLog.id });
-
-  const row = rows[0];
-  if (!row) {
-    throw new Error(`Failed to insert event log entry for ${payload.event}`);
-  }
-  return row.id;
+  return rows[0]?.id;
 }
 
 export async function markProcessed(
@@ -41,4 +43,32 @@ export async function markFailed(
     .update(eventLog)
     .set({ status: "failed", error, notificationsSent, processedAt: new Date() })
     .where(eq(eventLog.id, id));
+}
+
+/**
+ * Events that were acknowledged but never processed, e.g. because the
+ * process died before the queue drained. Ordered oldest first.
+ */
+export async function listUnprocessed(
+  db: DbClient,
+  limit: number,
+): Promise<EventLogEntry[]> {
+  return db
+    .select()
+    .from(eventLog)
+    .where(eq(eventLog.status, "received"))
+    .orderBy(asc(eventLog.id))
+    .limit(limit);
+}
+
+/** Delete event log rows received before the cutoff. Returns the count. */
+export async function deleteReceivedBefore(
+  db: DbClient,
+  cutoff: Date,
+): Promise<number> {
+  const rows = await db
+    .delete(eventLog)
+    .where(lt(eventLog.receivedAt, cutoff))
+    .returning({ id: eventLog.id });
+  return rows.length;
 }

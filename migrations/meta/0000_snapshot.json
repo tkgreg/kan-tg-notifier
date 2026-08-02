@@ -1,5 +1,5 @@
 {
-  "id": "d9a986c4-76e0-427f-8a2d-450fe9b98f17",
+  "id": "560610df-85a4-4823-8edb-3b7fc173a1ea",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -111,6 +111,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "payload_hash": {
+          "name": "payload_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
         "status": {
           "name": "status",
           "type": "varchar(16)",
@@ -157,6 +163,21 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "event_log_payload_hash_idx": {
+          "name": "event_log_payload_hash_idx",
+          "columns": [
+            {
+              "expression": "payload_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

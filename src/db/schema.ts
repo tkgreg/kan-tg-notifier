@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -71,6 +72,8 @@ export type EventLogStatus = (typeof EVENT_LOG_STATUSES)[number];
 
 /**
  * Audit log of received webhook deliveries and their processing outcome.
+ * payload_hash is the SHA-256 of the raw request body; its unique index
+ * makes replayed deliveries (identical signed bytes) no-ops.
  */
 export const eventLog = pgTable(
   "event_log",
@@ -78,6 +81,7 @@ export const eventLog = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     event: varchar("event", { length: 64 }).notNull(),
     payload: jsonb("payload").notNull(),
+    payloadHash: varchar("payload_hash", { length: 64 }).notNull(),
     status: varchar("status", { length: 16 })
       .$type<EventLogStatus>()
       .notNull()
@@ -89,7 +93,10 @@ export const eventLog = pgTable(
       .defaultNow(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
-  (table) => [index("event_log_status_idx").on(table.status)],
+  (table) => [
+    index("event_log_status_idx").on(table.status),
+    uniqueIndex("event_log_payload_hash_idx").on(table.payloadHash),
+  ],
 );
 
 export type EventLogEntry = typeof eventLog.$inferSelect;

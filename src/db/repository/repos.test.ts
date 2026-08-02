@@ -167,13 +167,40 @@ describe("repositories (PGlite with real migrations)", () => {
         await subscriptionRepo.setBoardFilter(testDb.db, -999, ["x"]),
       ).toBeUndefined();
     });
+
+    it("moves a subscription to the new chat id on migration", async () => {
+      await subscriptionRepo.upsert(testDb.db, input);
+      await subscriptionRepo.migrateChatId(testDb.db, -100, -1005);
+
+      expect(await subscriptionRepo.getByChatId(testDb.db, -100)).toBeUndefined();
+      const migrated = await subscriptionRepo.getByChatId(testDb.db, -1005);
+      expect(migrated?.chatType).toBe("supergroup");
+      expect(migrated?.allEvents).toBe(true);
+    });
+
+    it("drops the stale row when the new chat id already has a subscription", async () => {
+      await subscriptionRepo.upsert(testDb.db, input);
+      await subscriptionRepo.upsert(testDb.db, {
+        ...input,
+        chatId: -1005,
+        allEvents: false,
+        events: ["card.created"],
+      });
+
+      await subscriptionRepo.migrateChatId(testDb.db, -100, -1005);
+
+      expect(await subscriptionRepo.getByChatId(testDb.db, -100)).toBeUndefined();
+      const kept = await subscriptionRepo.getByChatId(testDb.db, -1005);
+      expect(kept?.events).toEqual(["card.created"]);
+    });
   });
 
   describe("event.repo", () => {
     it("stores an event and marks it processed", async () => {
       const payload = buildPayload("card.created");
-      const id = await eventRepo.insertReceived(testDb.db, payload);
-      await eventRepo.markProcessed(testDb.db, id, 3);
+      const id = await eventRepo.insertReceived(testDb.db, payload, "hash-a");
+      expect(id).toBeDefined();
+      await eventRepo.markProcessed(testDb.db, id!, 3);
 
       const rows = await testDb.db.query.eventLog.findMany();
       expect(rows).toHaveLength(1);
@@ -189,8 +216,9 @@ describe("repositories (PGlite with real migrations)", () => {
       const id = await eventRepo.insertReceived(
         testDb.db,
         buildPayload("card.deleted"),
+        "hash-b",
       );
-      await eventRepo.markFailed(testDb.db, id, "chat unreachable", 1);
+      await eventRepo.markFailed(testDb.db, id!, "chat unreachable", 1);
 
       const rows = await testDb.db.query.eventLog.findMany();
       expect(rows[0]).toMatchObject({
@@ -198,6 +226,51 @@ describe("repositories (PGlite with real migrations)", () => {
         error: "chat unreachable",
         notificationsSent: 1,
       });
+    });
+
+    it("returns undefined for a duplicate payload hash instead of a second row", async () => {
+      const payload = buildPayload("card.created");
+      const first = await eventRepo.insertReceived(testDb.db, payload, "same-hash");
+      const replay = await eventRepo.insertReceived(testDb.db, payload, "same-hash");
+
+      expect(first).toBeDefined();
+      expect(replay).toBeUndefined();
+      expect(await testDb.db.query.eventLog.findMany()).toHaveLength(1);
+    });
+
+    it("lists only unprocessed events, oldest first", async () => {
+      const first = await eventRepo.insertReceived(
+        testDb.db,
+        buildPayload("card.created"),
+        "hash-1",
+      );
+      const second = await eventRepo.insertReceived(
+        testDb.db,
+        buildPayload("card.updated"),
+        "hash-2",
+      );
+      await eventRepo.insertReceived(testDb.db, buildPayload("card.moved"), "hash-3");
+      await eventRepo.markProcessed(testDb.db, second!, 1);
+
+      const pending = await eventRepo.listUnprocessed(testDb.db, 10);
+      expect(pending.map((entry) => entry.event)).toEqual([
+        "card.created",
+        "card.moved",
+      ]);
+      expect(pending[0]?.id).toBe(first);
+    });
+
+    it("deletes entries received before the cutoff", async () => {
+      await eventRepo.insertReceived(testDb.db, buildPayload("card.created"), "hash-1");
+      await eventRepo.insertReceived(testDb.db, buildPayload("card.deleted"), "hash-2");
+
+      const future = new Date(Date.now() + 60_000);
+      expect(await eventRepo.deleteReceivedBefore(testDb.db, future)).toBe(2);
+      expect(await testDb.db.query.eventLog.findMany()).toHaveLength(0);
+
+      const past = new Date(Date.now() - 60_000);
+      await eventRepo.insertReceived(testDb.db, buildPayload("card.moved"), "hash-3");
+      expect(await eventRepo.deleteReceivedBefore(testDb.db, past)).toBe(0);
     });
   });
 });

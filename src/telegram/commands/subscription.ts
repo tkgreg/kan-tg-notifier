@@ -6,7 +6,11 @@ import type { Logger } from "../../logger.js";
 import * as subscriptionRepo from "../../db/repository/subscription.repo.js";
 import { isKanWebhookEvent, KAN_WEBHOOK_EVENTS } from "../../kan/events.js";
 import { escapeHtml } from "../../notifications/format.js";
-import { canManageSubscription } from "../permissions.js";
+import {
+  canManageSubscription,
+  isAnonymousGroupAdmin,
+  isAuthorizedSubscriber,
+} from "../permissions.js";
 
 export interface SubscriptionCommandDeps {
   db: DbClient;
@@ -38,14 +42,19 @@ function chatTitle(ctx: Context): string | null {
 /**
  * Guard shared by all subscription commands. Replies with the reason and
  * returns false when the command must not run in this chat.
+ *
+ * Two independent checks:
+ * 1. Chat-level rights — only chat admins may reconfigure a group.
+ * 2. Workspace-level authorization — the invoker must be a bot admin or
+ *    have an approved Kan account link, so strangers cannot subscribe
+ *    themselves (or their own groups) to the workspace event stream.
  */
 async function ensureCanManage(
   deps: SubscriptionCommandDeps,
   ctx: Context,
 ): Promise<boolean> {
   const chat = ctx.chat;
-  const from = ctx.from;
-  if (!chat || !from) return false;
+  if (!chat) return false;
 
   if (chat.type === "channel") {
     await replyHtml(
@@ -55,6 +64,9 @@ async function ensureCanManage(
     return false;
   }
 
+  const from = ctx.from;
+  if (!from) return false;
+
   const allowed = await canManageSubscription(
     ctx,
     deps.config.adminTelegramIds,
@@ -63,6 +75,28 @@ async function ensureCanManage(
     await replyHtml(
       ctx,
       "Only chat administrators can manage this chat's subscription.",
+    );
+    return false;
+  }
+
+  const authorized = await isAuthorizedSubscriber(
+    deps.db,
+    deps.config.adminTelegramIds,
+    from.id,
+  );
+  if (!authorized) {
+    if (isAnonymousGroupAdmin(ctx)) {
+      await replyHtml(
+        ctx,
+        "I can't verify anonymous admins. Turn off <i>Remain anonymous</i> " +
+          "for a moment, or ask a bot admin to run this command.",
+      );
+      return false;
+    }
+    await replyHtml(
+      ctx,
+      "You need an approved Kan account link to manage subscriptions. " +
+        "Send /link your-email@example.com to me in a direct message first.",
     );
     return false;
   }

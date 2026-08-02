@@ -17,6 +17,7 @@ describe("loadConfig", () => {
     expect(config.adminTelegramIds).toEqual([]);
     expect(config.autoApproveLinks).toBe(false);
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
+    expect(config.eventLogRetentionDays).toBe(30);
     expect(config.logLevel).toBe("info");
   });
 

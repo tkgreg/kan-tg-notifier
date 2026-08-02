@@ -5,8 +5,11 @@ import type { AppConfig } from "../../config.js";
 import type { DbClient } from "../../db/client.js";
 import type { Logger } from "../../logger.js";
 import * as mappingRepo from "../../db/repository/mapping.repo.js";
-import { escapeHtml } from "../../notifications/format.js";
+import { chunkLines, escapeHtml } from "../../notifications/format.js";
 import { isGlobalAdmin } from "../permissions.js";
+
+/** Below Telegram's 4096 hard limit, leaving room for the header line. */
+const MAPPING_LIST_CHUNK_LENGTH = 3900;
 
 export interface AdminCommandDeps {
   db: DbClient;
@@ -168,5 +171,11 @@ export async function handleMappings(
     return `${icon} <code>${escapeHtml(mapping.kanEmail)}</code> → ${account}`;
   });
 
-  await replyHtml(ctx, `<b>Account links</b>\n${lines.join("\n")}`);
+  // A long list must be split across messages: Telegram rejects
+  // messages over 4096 characters and the admin would get nothing.
+  const chunks = chunkLines(lines, MAPPING_LIST_CHUNK_LENGTH);
+  await replyHtml(ctx, `<b>Account links</b>\n${chunks[0] ?? ""}`);
+  for (const chunk of chunks.slice(1)) {
+    await replyHtml(ctx, chunk);
+  }
 }

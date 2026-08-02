@@ -11,7 +11,49 @@ export function escapeHtml(text: string): string {
 
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 1)}…`;
+  let cut = text.slice(0, maxLength - 1);
+  // Never split a UTF-16 surrogate pair: a lone high surrogate would be
+  // delivered as U+FFFD by Telegram.
+  const lastCodeUnit = cut.charCodeAt(cut.length - 1);
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    cut = cut.slice(0, -1);
+  }
+  return `${cut}…`;
+}
+
+/**
+ * Mask an email for display in group chats: emails must never be posted
+ * verbatim outside of direct messages.
+ */
+export function maskEmail(email: string): string {
+  const atIndex = email.indexOf("@");
+  if (atIndex < 1) return "a member";
+  return `${email.slice(0, 1)}***@${email.slice(atIndex + 1)}`;
+}
+
+/**
+ * Split lines into chunks that each fit within a Telegram message
+ * (hard API limit: 4096 chars). Lines are never broken apart.
+ */
+export function chunkLines(lines: string[], maxLength: number): string[] {
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const line of lines) {
+    if (current.length === 0) {
+      current = line;
+      continue;
+    }
+    if (current.length + 1 + line.length > maxLength) {
+      chunks.push(current);
+      current = line;
+      continue;
+    }
+    current = `${current}\n${line}`;
+  }
+  if (current.length > 0) chunks.push(current);
+
+  return chunks;
 }
 
 function cardUrl(kanBaseUrl: string, cardPublicId: string): string {
@@ -87,7 +129,11 @@ export function formatChanges(changes: KanChanges): string[] {
 function memberDisplayName(payload: KanWebhookPayload): string {
   const { member } = payload.data;
   if (!member) return "a member";
-  return escapeHtml(member.name ?? member.email ?? "a member");
+  if (member.name) return escapeHtml(member.name);
+  // Group messages must not leak raw emails (members invited by email
+  // have no display name yet); the masked form still identifies them.
+  if (member.email) return escapeHtml(maskEmail(member.email));
+  return "a member";
 }
 
 function headerLine(payload: KanWebhookPayload, kanBaseUrl: string): string {

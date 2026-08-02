@@ -12,9 +12,11 @@ Maps Kan (OIDC) user accounts, identified by email, to Telegram accounts. Kan we
 ## Security decisions
 
 - Approval is required by default: without it, anyone able to message the bot could claim a colleague's email and receive that person's assignment notifications (card titles, boards).
+- `/link` is enumeration-resistant: when approval is required, the reply is identical whether or not the email is already linked, and conflicts are reported only to admins (with a reminder to verify email ownership out of band before approving). In auto-approve/admin mode replies are honest, since that mode already assumes a trusted environment.
 - Emails are normalized (trimmed, lowercased) before storage and lookup.
-- `/link`, `/unlink`, `/whoami` and all admin commands only work in private chats so emails never appear in group history.
+- `/link`, `/unlink`, `/whoami` and all admin commands only work in private chats so emails never appear in group history; group notifications mask emails (`b***@corp.com`) when a member has no display name.
 - Only **approved** mappings are considered during notification routing.
+- An approved mapping is also the prerequisite for subscribing chats (see `chat-subscriptions.md`).
 
 ## Commands
 

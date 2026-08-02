@@ -47,6 +47,14 @@ describe("processEvent", () => {
     await testDb.close();
   });
 
+  let hashCounter = 0;
+  async function storeEvent(payload: Parameters<typeof eventRepo.insertReceived>[1]) {
+    hashCounter += 1;
+    const id = await eventRepo.insertReceived(testDb.db, payload, `hash-${hashCounter}`);
+    if (id === undefined) throw new Error("unexpected duplicate event in test setup");
+    return id;
+  }
+
   function depsWith(notifier: Notifier): ProcessorDeps {
     return {
       db: testDb.db,
@@ -75,7 +83,7 @@ describe("processEvent", () => {
     });
     const { notifier, sent } = createFakeNotifier();
     const payload = buildPayload("card.created");
-    const id = await eventRepo.insertReceived(testDb.db, payload);
+    const id = await storeEvent(payload);
 
     await processEvent(depsWith(notifier), id, payload);
 
@@ -98,7 +106,7 @@ describe("processEvent", () => {
     const payload = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
     });
-    const id = await eventRepo.insertReceived(testDb.db, payload);
+    const id = await storeEvent(payload);
 
     await processEvent(depsWith(notifier), id, payload);
 
@@ -118,7 +126,7 @@ describe("processEvent", () => {
     const payload = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
     });
-    const id = await eventRepo.insertReceived(testDb.db, payload);
+    const id = await storeEvent(payload);
 
     await processEvent(depsWith(notifier), id, payload);
     expect(sent).toHaveLength(0);
@@ -145,7 +153,7 @@ describe("processEvent", () => {
       new Map([[-100, new Error("network down")]]),
     );
     const payload = buildPayload("card.created");
-    const id = await eventRepo.insertReceived(testDb.db, payload);
+    const id = await storeEvent(payload);
 
     await processEvent(depsWith(notifier), id, payload);
 
@@ -153,6 +161,43 @@ describe("processEvent", () => {
     const row = await eventRow(id);
     expect(row).toMatchObject({ status: "failed", notificationsSent: 1 });
     expect(row?.error).toContain("network down");
+  });
+
+  it("follows a group-to-supergroup migration and redelivers", async () => {
+    await subscriptionRepo.upsert(testDb.db, {
+      chatId: -100,
+      chatType: "group",
+      chatTitle: "Upgraded",
+      allEvents: true,
+      events: [],
+      createdBy: 111,
+    });
+    const { notifier, sent } = createFakeNotifier(
+      new Map([
+        [
+          -100,
+          new NotificationDeliveryError("group upgraded", {
+            chatId: -100,
+            attempts: 1,
+            unreachableChat: false,
+            migratedToChatId: -1005,
+          }),
+        ],
+      ]),
+    );
+    const payload = buildPayload("card.created");
+    const id = await storeEvent(payload);
+
+    await processEvent(depsWith(notifier), id, payload);
+
+    expect(sent.map((message) => message.chatId)).toEqual([-1005]);
+    const migrated = await subscriptionRepo.getByChatId(testDb.db, -1005);
+    expect(migrated).toBeDefined();
+    expect(await subscriptionRepo.getByChatId(testDb.db, -100)).toBeUndefined();
+    expect(await eventRow(id)).toMatchObject({
+      status: "processed",
+      notificationsSent: 1,
+    });
   });
 
   it("removes the subscription of a chat that blocked the bot", async () => {
@@ -177,7 +222,7 @@ describe("processEvent", () => {
       ]),
     );
     const payload = buildPayload("card.created");
-    const id = await eventRepo.insertReceived(testDb.db, payload);
+    const id = await storeEvent(payload);
 
     await processEvent(depsWith(notifier), id, payload);
 

@@ -5,10 +5,12 @@ import {
   TEST_KAN_BASE_URL,
 } from "../test-utils/fixtures.js";
 import {
+  chunkLines,
   escapeHtml,
   formatChanges,
   formatEventMessage,
   formatMemberDirectMessage,
+  maskEmail,
   truncate,
 } from "./format.js";
 
@@ -27,6 +29,45 @@ describe("truncate", () => {
     const result = truncate("a".repeat(20), 10);
     expect(result).toHaveLength(10);
     expect(result.endsWith("…")).toBe(true);
+  });
+
+  it("never splits a surrogate pair", () => {
+    // "🎉" is two UTF-16 code units; cutting at 4 would land mid-pair.
+    const result = truncate("ab🎉🎉", 4);
+    expect(result).toBe("ab…");
+    expect(result.includes("�")).toBe(false);
+    // The kept string must remain well-formed UTF-16.
+    expect(() => new TextEncoder().encode(result)).not.toThrow();
+    expect(new TextDecoder().decode(new TextEncoder().encode(result))).toBe(result);
+  });
+});
+
+describe("maskEmail", () => {
+  it("keeps the first character and the domain", () => {
+    expect(maskEmail("bob@corp.com")).toBe("b***@corp.com");
+  });
+
+  it("falls back for strings without a maskable local part", () => {
+    expect(maskEmail("@corp.com")).toBe("a member");
+    expect(maskEmail("not-an-email")).toBe("a member");
+  });
+});
+
+describe("chunkLines", () => {
+  it("returns one chunk when everything fits", () => {
+    expect(chunkLines(["a", "b"], 10)).toEqual(["a\nb"]);
+  });
+
+  it("starts a new chunk instead of exceeding the limit", () => {
+    const chunks = chunkLines(["aaaa", "bbbb", "cc"], 9);
+    expect(chunks).toEqual(["aaaa\nbbbb", "cc"]);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(9);
+    }
+  });
+
+  it("returns an empty list for no lines", () => {
+    expect(chunkLines([], 10)).toEqual([]);
   });
 });
 
@@ -86,6 +127,15 @@ describe("formatEventMessage", () => {
     });
     const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
     expect(text).toContain("removed Bob from");
+  });
+
+  it("masks the email of members without a display name in group messages", () => {
+    const payload = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: null, email: "bob@corp.com" },
+    });
+    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
+    expect(text).not.toContain("bob@corp.com");
+    expect(text).toContain("b***@corp.com");
   });
 
   it("renders card.moved with the target list", () => {

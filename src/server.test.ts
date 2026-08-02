@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -11,17 +12,21 @@ const SECRET = "test-secret-at-least-16-chars";
 
 describe("webhook server", () => {
   let server: FastifyInstance;
-  let received: KanWebhookPayload[];
+  let received: { payload: KanWebhookPayload; payloadHash: string }[];
+  let seenHashes: Set<string>;
 
   beforeEach(() => {
     received = [];
+    seenHashes = new Set();
     server = createWebhookServer({
       webhookSecret: SECRET,
       timestampToleranceSeconds: 0,
       logger: createSilentLogger(),
-      onEvent: (payload) => {
-        received.push(payload);
-        return Promise.resolve();
+      onEvent: (payload, payloadHash) => {
+        if (seenHashes.has(payloadHash)) return Promise.resolve("duplicate");
+        seenHashes.add(payloadHash);
+        received.push({ payload, payloadHash });
+        return Promise.resolve("accepted");
       },
     });
   });
@@ -43,14 +48,27 @@ describe("webhook server", () => {
     });
   }
 
-  it("accepts a correctly signed payload with 202", async () => {
+  it("accepts a correctly signed payload with 202 and passes the body hash", async () => {
     const body = JSON.stringify(buildPayload("card.created"));
     const response = await signedRequest(body);
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ status: "accepted" });
     expect(received).toHaveLength(1);
-    expect(received[0]?.event).toBe("card.created");
+    expect(received[0]?.payload.event).toBe("card.created");
+    expect(received[0]?.payloadHash).toBe(
+      createHash("sha256").update(body).digest("hex"),
+    );
+  });
+
+  it("acknowledges a replayed delivery as a duplicate without reprocessing", async () => {
+    const body = JSON.stringify(buildPayload("card.created"));
+    await signedRequest(body);
+    const replay = await signedRequest(body);
+
+    expect(replay.statusCode).toBe(202);
+    expect(replay.json()).toEqual({ status: "duplicate" });
+    expect(received).toHaveLength(1);
   });
 
   it("rejects a missing signature with 401", async () => {
@@ -88,9 +106,9 @@ describe("webhook server", () => {
       webhookSecret: SECRET,
       timestampToleranceSeconds: 600,
       logger: createSilentLogger(),
-      onEvent: (payload) => {
-        received.push(payload);
-        return Promise.resolve();
+      onEvent: (payload, payloadHash) => {
+        received.push({ payload, payloadHash });
+        return Promise.resolve("accepted");
       },
     });
     const payload = buildPayload("card.created");
@@ -116,9 +134,9 @@ describe("webhook server", () => {
       webhookSecret: SECRET,
       timestampToleranceSeconds: 600,
       logger: createSilentLogger(),
-      onEvent: (payload) => {
-        received.push(payload);
-        return Promise.resolve();
+      onEvent: (payload, payloadHash) => {
+        received.push({ payload, payloadHash });
+        return Promise.resolve("accepted");
       },
     });
     const payload = buildPayload("card.created");

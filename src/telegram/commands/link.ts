@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AppConfig } from "../../config.js";
 import type { DbClient } from "../../db/client.js";
 import type { Logger } from "../../logger.js";
+import { isUniqueViolation } from "../../db/errors.js";
 import * as mappingRepo from "../../db/repository/mapping.repo.js";
 import { escapeHtml } from "../../notifications/format.js";
 import { isGlobalAdmin } from "../permissions.js";
@@ -24,19 +25,13 @@ async function replyHtml(ctx: Context, text: string): Promise<void> {
   await ctx.reply(text, { parse_mode: "HTML" });
 }
 
-async function notifyAdminsAboutRequest(
+async function notifyAdmins(
   deps: LinkCommandDeps,
   ctx: Context,
-  email: string,
+  text: string,
 ): Promise<void> {
   const from = ctx.from;
   if (!from) return;
-
-  const requester = from.username ? `@${from.username}` : `id ${from.id}`;
-  const text =
-    `🔗 New link request: <b>${escapeHtml(requester)}</b> wants to link ` +
-    `<code>${escapeHtml(email)}</code>.\n` +
-    `Use /approve ${escapeHtml(email)} or /reject ${escapeHtml(email)}.`;
 
   for (const adminId of deps.config.adminTelegramIds) {
     if (adminId === from.id) continue;
@@ -53,6 +48,25 @@ async function notifyAdminsAboutRequest(
       );
     }
   }
+}
+
+function requesterLabel(ctx: Context): string {
+  const from = ctx.from;
+  if (!from) return "unknown";
+  return from.username ? `@${from.username} (id ${from.id})` : `id ${from.id}`;
+}
+
+/**
+ * The reply for a recorded (or silently conflicting) link request. It is
+ * deliberately identical in both cases so /link cannot be used to probe
+ * which emails are registered.
+ */
+async function replyRequestRecorded(ctx: Context, email: string): Promise<void> {
+  await ctx.reply(
+    `⏳ Link request for <code>${escapeHtml(email)}</code> recorded. ` +
+      "An admin has to approve it — you will be notified here.",
+    { parse_mode: "HTML" },
+  );
 }
 
 export async function handleLink(
@@ -90,27 +104,61 @@ export async function handleLink(
     return;
   }
 
-  const existingEmail = await mappingRepo.getByEmail(deps.db, email);
-  if (existingEmail) {
-    await replyHtml(
-      ctx,
-      "That email is already linked to another Telegram account. " +
-        "Ask an admin to /reject the existing link if this is a mistake.",
-    );
-    return;
-  }
-
   const autoApproved =
     deps.config.autoApproveLinks ||
     isGlobalAdmin(deps.config.adminTelegramIds, from.id);
 
-  const mapping = await mappingRepo.create(deps.db, {
-    telegramUserId: from.id,
-    telegramUsername: from.username ?? null,
-    kanEmail: email,
-    status: autoApproved ? "approved" : "pending",
-    ...(autoApproved ? { approvedBy: from.id } : {}),
-  });
+  const existingEmail = await mappingRepo.getByEmail(deps.db, email);
+  if (existingEmail) {
+    if (autoApproved) {
+      // Trusted requester (admin, or auto-approve environment): an
+      // honest answer is more useful than enumeration resistance.
+      await replyHtml(
+        ctx,
+        "That email is already linked to another Telegram account. " +
+          "Ask an admin to /reject the existing link if this is a mistake.",
+      );
+      return;
+    }
+    // Same reply as a successful request, so /link cannot be used to
+    // probe which emails are registered. Only admins see the conflict.
+    await replyRequestRecorded(ctx, email);
+    await notifyAdmins(
+      deps,
+      ctx,
+      `⚠️ ${escapeHtml(requesterLabel(ctx))} requested a link to ` +
+        `<code>${escapeHtml(email)}</code>, which is already linked to another ` +
+        "account. No new request was stored. If this is a legitimate takeover, " +
+        `/reject ${escapeHtml(email)} first and let them retry.`,
+    );
+    return;
+  }
+
+  let mapping: Awaited<ReturnType<typeof mappingRepo.create>>;
+  try {
+    mapping = await mappingRepo.create(deps.db, {
+      telegramUserId: from.id,
+      telegramUsername: from.username ?? null,
+      kanEmail: email,
+      status: autoApproved ? "approved" : "pending",
+      ...(autoApproved ? { approvedBy: from.id } : {}),
+    });
+  } catch (error) {
+    // Concurrent request took the email or this Telegram account
+    // between the pre-checks and the insert.
+    if (isUniqueViolation(error)) {
+      if (autoApproved) {
+        await replyHtml(
+          ctx,
+          "That email or your account was linked concurrently. Use /whoami to check.",
+        );
+        return;
+      }
+      await replyRequestRecorded(ctx, email);
+      return;
+    }
+    throw error;
+  }
 
   deps.logger.info(
     {
@@ -130,12 +178,15 @@ export async function handleLink(
     return;
   }
 
-  await replyHtml(
+  await replyRequestRecorded(ctx, mapping.kanEmail);
+  await notifyAdmins(
+    deps,
     ctx,
-    `⏳ Link request for <code>${escapeHtml(mapping.kanEmail)}</code> recorded. ` +
-      "An admin has to approve it — you will be notified here.",
+    `🔗 New link request: <b>${escapeHtml(requesterLabel(ctx))}</b> wants to link ` +
+      `<code>${escapeHtml(mapping.kanEmail)}</code>.\n` +
+      "Verify they really own this email before approving.\n" +
+      `Use /approve ${escapeHtml(mapping.kanEmail)} or /reject ${escapeHtml(mapping.kanEmail)}.`,
   );
-  await notifyAdminsAboutRequest(deps, ctx, mapping.kanEmail);
 }
 
 export async function handleUnlink(
