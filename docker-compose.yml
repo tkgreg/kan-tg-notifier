@@ -1,0 +1,40 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    # Allow queued notifications (incl. Telegram flood-wait retries) to
+    # drain before the container is killed.
+    stop_grace_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
+      DATABASE_URL: postgres://kan_tg_notifier:${POSTGRES_PASSWORD:-kan_tg_notifier}@postgres:5432/kan_tg_notifier
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET in .env}
+      KAN_BASE_URL: ${KAN_BASE_URL:?set KAN_BASE_URL in .env}
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
+      AUTO_APPROVE_LINKS: ${AUTO_APPROVE_LINKS:-false}
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: ${WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:-600}
+      EVENT_LOG_RETENTION_DAYS: ${EVENT_LOG_RETENTION_DAYS:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${PORT:-8080}:8080"
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kan_tg_notifier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kan_tg_notifier}
+      POSTGRES_DB: kan_tg_notifier
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kan_tg_notifier -d kan_tg_notifier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
