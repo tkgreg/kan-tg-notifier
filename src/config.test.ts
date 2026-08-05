@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigError, loadConfig } from "./config.js";
+import {
+  ConfigError,
+  deriveTelegramWebhookSecret,
+  loadConfig,
+} from "./config.js";
 
 const validEnv = {
   TELEGRAM_BOT_TOKEN: "123:abc",
@@ -20,6 +24,27 @@ describe("loadConfig", () => {
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
     expect(config.eventLogRetentionDays).toBe(30);
     expect(config.logLevel).toBe("info");
+    expect(config.runtimeMode).toBe("persistent");
+    expect(config.publicUrl).toBeUndefined();
+    expect(config.runMigrations).toBe(true);
+  });
+
+  it("treats blank values as absent so defaults apply", () => {
+    const config = loadConfig({
+      ...validEnv,
+      HOST: "",
+      PUBLIC_URL: "   ",
+      ADMIN_TELEGRAM_IDS: "",
+    });
+    expect(config.host).toBe("0.0.0.0");
+    expect(config.publicUrl).toBeUndefined();
+    expect(config.adminTelegramIds).toEqual([]);
+  });
+
+  it("parses RUN_MIGRATIONS", () => {
+    expect(
+      loadConfig({ ...validEnv, RUN_MIGRATIONS: "false" }).runMigrations,
+    ).toBe(false);
   });
 
   it("strips trailing slashes from KAN_BASE_URL", () => {
@@ -55,9 +80,9 @@ describe("loadConfig", () => {
   });
 
   it("rejects a short webhook secret", () => {
-    expect(() =>
-      loadConfig({ ...validEnv, WEBHOOK_SECRET: "short" }),
-    ).toThrow(ConfigError);
+    expect(() => loadConfig({ ...validEnv, WEBHOOK_SECRET: "short" })).toThrow(
+      ConfigError,
+    );
   });
 
   it("rejects an invalid KAN_BASE_URL", () => {
@@ -76,5 +101,88 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ ...validEnv, AUTO_APPROVE_LINKS: "yes" }),
     ).toThrow(ConfigError);
+  });
+
+  describe("serverless mode", () => {
+    const serverlessEnv = {
+      ...validEnv,
+      RUNTIME_MODE: "serverless",
+      PUBLIC_URL: "https://bot.example.com",
+    };
+
+    it("loads with a public URL", () => {
+      const config = loadConfig(serverlessEnv);
+      expect(config.runtimeMode).toBe("serverless");
+      expect(config.publicUrl).toBe("https://bot.example.com");
+    });
+
+    it("strips trailing slashes from PUBLIC_URL", () => {
+      const config = loadConfig({
+        ...serverlessEnv,
+        PUBLIC_URL: "https://bot.example.com/",
+      });
+      expect(config.publicUrl).toBe("https://bot.example.com");
+    });
+
+    it("rejects a missing PUBLIC_URL", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, RUNTIME_MODE: "serverless" }),
+      ).toThrow(/PUBLIC_URL is required/);
+    });
+
+    it("rejects a plain http PUBLIC_URL", () => {
+      expect(() =>
+        loadConfig({ ...serverlessEnv, PUBLIC_URL: "http://bot.example.com" }),
+      ).toThrow(/https/);
+    });
+
+    it("rejects an unknown runtime mode", () => {
+      expect(() => loadConfig({ ...validEnv, RUNTIME_MODE: "lambda" })).toThrow(
+        ConfigError,
+      );
+    });
+  });
+
+  describe("Telegram webhook secret", () => {
+    it("derives a stable secret that differs from WEBHOOK_SECRET", () => {
+      const first = loadConfig({ ...validEnv }).telegramWebhookSecret;
+      const second = loadConfig({ ...validEnv }).telegramWebhookSecret;
+
+      expect(first).toBe(second);
+      expect(first).toBe(
+        deriveTelegramWebhookSecret(validEnv.TELEGRAM_BOT_TOKEN),
+      );
+      expect(first).not.toBe(validEnv.WEBHOOK_SECRET);
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("derives a different secret for a different bot token", () => {
+      expect(deriveTelegramWebhookSecret("123:abc")).not.toBe(
+        deriveTelegramWebhookSecret("456:def"),
+      );
+    });
+
+    it("prefers an explicitly configured secret", () => {
+      const config = loadConfig({
+        ...validEnv,
+        TELEGRAM_WEBHOOK_SECRET: "explicit-secret-token_1",
+      });
+      expect(config.telegramWebhookSecret).toBe("explicit-secret-token_1");
+    });
+
+    it("rejects a secret with characters Telegram does not allow", () => {
+      expect(() =>
+        loadConfig({
+          ...validEnv,
+          TELEGRAM_WEBHOOK_SECRET: "secret with spaces!",
+        }),
+      ).toThrow(ConfigError);
+    });
+
+    it("rejects a too short secret", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, TELEGRAM_WEBHOOK_SECRET: "short" }),
+      ).toThrow(ConfigError);
+    });
   });
 });

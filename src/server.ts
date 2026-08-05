@@ -10,6 +10,7 @@ import {
   WebhookPayloadError,
 } from "./kan/events.js";
 import { isTimestampFresh, verifySignature } from "./kan/signature.js";
+import { verifySecretToken } from "./telegram/secret-token.js";
 
 /**
  * Kan imposes no length limit on card descriptions or comments, and a
@@ -18,6 +19,17 @@ import { isTimestampFresh, verifySignature } from "./kan/signature.js";
  * deliveries with 413.
  */
 const BODY_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Receiving Telegram updates over HTTP instead of long polling. Only used
+ * in serverless mode, where nothing keeps a getUpdates loop alive.
+ */
+export interface TelegramUpdatesDeps {
+  path: string;
+  /** Expected X-Telegram-Bot-Api-Secret-Token value. */
+  secretToken: string;
+  handleUpdate: (update: unknown) => Promise<void>;
+}
 
 export interface WebhookServerDeps {
   webhookSecret: string;
@@ -32,9 +44,13 @@ export interface WebhookServerDeps {
     payload: KanWebhookPayload,
     payloadHash: string,
   ) => Promise<"accepted" | "duplicate">;
+  /** When set, Telegram updates are accepted on this route. */
+  telegramUpdates?: TelegramUpdatesDeps;
 }
 
-function singleHeader(value: string | string[] | undefined): string | undefined {
+function singleHeader(
+  value: string | string[] | undefined,
+): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
@@ -57,6 +73,49 @@ export function createWebhookServer(deps: WebhookServerDeps): FastifyInstance {
   );
 
   server.get("/health", () => ({ status: "ok" }));
+
+  const telegram = deps.telegramUpdates;
+  if (telegram) {
+    server.post(telegram.path, async (request, reply) => {
+      const secretHeader = singleHeader(
+        request.headers["x-telegram-bot-api-secret-token"],
+      );
+      if (!verifySecretToken(secretHeader, telegram.secretToken)) {
+        deps.logger.warn(
+          { hasSecretToken: secretHeader !== undefined },
+          "Rejected Telegram update with missing or invalid secret token",
+        );
+        return reply.code(401).send({ error: "Invalid secret token" });
+      }
+
+      const rawBody = request.body;
+      if (!Buffer.isBuffer(rawBody)) {
+        return reply
+          .code(415)
+          .send({ error: "Expected an application/json body" });
+      }
+
+      let update: unknown;
+      try {
+        update = JSON.parse(rawBody.toString("utf8"));
+      } catch {
+        return reply.code(400).send({ error: "Body is not valid JSON" });
+      }
+
+      try {
+        await telegram.handleUpdate(update);
+      } catch (error) {
+        // Telegram retries a failed delivery for up to 24h, and an update
+        // that throws once will throw again, so acknowledge it and leave
+        // the diagnosis to the log.
+        deps.logger.error(
+          { error: error instanceof Error ? error.message : String(error) },
+          "Telegram update handler failed",
+        );
+      }
+      return reply.code(200).send({ status: "ok" });
+    });
+  }
 
   server.post("/webhook", async (request, reply) => {
     const rawBody = request.body;
