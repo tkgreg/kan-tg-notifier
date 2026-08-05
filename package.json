@@ -1,6 +1,6 @@
 {
   "name": "kan-tg-notifier",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Telegram bot that notifies users and groups about changes in Kan.bn via webhooks, with OIDC user to Telegram account mapping",
   "license": "AGPL-3.0",
   "type": "module",

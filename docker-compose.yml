@@ -1,6 +1,9 @@
 services:
   bot:
-    build: .
+    # Pin a specific release (e.g. tkgreg/kan-tg-notifier:0.1.0) for
+    # reproducible deployments; replace `image:` with `build: .` to build
+    # from source.
+    image: tkgreg/kan-tg-notifier:latest
     restart: unless-stopped
     # Allow queued notifications (incl. Telegram flood-wait retries) to
     # drain before the container is killed.

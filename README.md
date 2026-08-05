@@ -1,5 +1,10 @@
 # kan-tg-notifier
 
+[![CI](https://github.com/tkgreg/kan-tg-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/tkgreg/kan-tg-notifier/actions/workflows/ci.yml)
+[![Docker Hub](https://img.shields.io/docker/v/tkgreg/kan-tg-notifier?label=docker&sort=semver)](https://hub.docker.com/r/tkgreg/kan-tg-notifier)
+[![Docker Pulls](https://img.shields.io/docker/pulls/tkgreg/kan-tg-notifier)](https://hub.docker.com/r/tkgreg/kan-tg-notifier)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 Telegram integration for [Kan.bn](https://kan.bn). The bot receives [workspace webhooks](https://github.com/tkgreg/kan) from a Kan instance and delivers board activity to Telegram users and groups. It also maps Kan (OIDC) users to Telegram accounts so people get personal notifications, e.g. when they are assigned to a card.
 
 Built with TypeScript, PostgreSQL (Drizzle ORM), [grammY](https://grammy.dev) and Fastify.
@@ -30,8 +35,16 @@ Unknown event types from newer Kan versions are acknowledged and ignored, so the
 
 ## Quick start (Docker Compose)
 
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to [Docker Hub](https://hub.docker.com/r/tkgreg/kan-tg-notifier) — no cloning or building required.
+
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
-2. Create a `.env` file next to `docker-compose.yml`:
+2. Download the compose file (bot + PostgreSQL):
+
+   ```sh
+   curl -fsSLO https://raw.githubusercontent.com/tkgreg/kan-tg-notifier/main/docker-compose.yml
+   ```
+
+3. Create a `.env` file next to `docker-compose.yml`:
 
    ```env
    TELEGRAM_BOT_TOKEN=123456:ABC...
@@ -43,17 +56,37 @@ Unknown event types from newer Kan versions are acknowledged and ignored, so the
    # DATABASE_URL=postgres://user:password@db.example.com:5432/kan_tg_notifier
    ```
 
-3. Start it:
+4. Start it:
 
    ```sh
    docker compose up -d
    ```
 
-4. Expose port `8080` through your HTTPS reverse proxy. Kan only accepts `https://` webhook URLs on public hosts, so the endpoint must be reachable as e.g. `https://kan-bot.example.com/webhook`.
-5. In Kan: **Settings → Webhooks → Add webhook**, URL `https://kan-bot.example.com/webhook`, secret = your `WEBHOOK_SECRET`, and select the events you want.
-6. DM the bot `/link your-oidc-email@example.com` and approve it with `/approve` (as an admin). Then add the bot to a group (or stay in the DM) and send `/subscribe`.
+5. Expose port `8080` through your HTTPS reverse proxy. Kan only accepts `https://` webhook URLs on public hosts, so the endpoint must be reachable as e.g. `https://kan-bot.example.com/webhook`.
+6. In Kan: **Settings → Webhooks → Add webhook**, URL `https://kan-bot.example.com/webhook`, secret = your `WEBHOOK_SECRET`, and select the events you want.
+7. DM the bot `/link your-oidc-email@example.com` and approve it with `/approve` (as an admin). Then add the bot to a group (or stay in the DM) and send `/subscribe`.
 
 Database migrations run automatically on startup, unless `RUN_MIGRATIONS=false`.
+
+### Docker image
+
+| Tag              | Meaning                                              |
+| ---------------- | ---------------------------------------------------- |
+| `latest`         | Most recent release                                  |
+| `0.1`            | Latest patch release of the `0.1` line               |
+| `0.1.0`          | Exact release, immutable — pin this in production    |
+
+With an existing PostgreSQL you can skip Compose and run the container directly:
+
+```sh
+docker run -d --name kan-tg-notifier --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=123456:ABC... \
+  -e DATABASE_URL=postgres://user:password@db.example.com:5432/kan_tg_notifier \
+  -e WEBHOOK_SECRET=change-me-16-chars-min \
+  -e KAN_BASE_URL=https://kan.example.com \
+  -p 8080:8080 \
+  tkgreg/kan-tg-notifier:latest
+```
 
 ## Runtime modes
 
@@ -174,6 +207,17 @@ npm run dev       # start with tsx watch (requires a .env, see .env.example)
 ```
 
 Migrations are generated from the Drizzle schema with `npm run db:generate` and live in `migrations/`. Feature documentation lives in [`features/`](features/).
+
+### Releasing
+
+Releases are cut from `main` by pushing a semver tag:
+
+```sh
+npm version patch   # or minor / major — bumps package.json and creates the vX.Y.Z tag
+git push --follow-tags
+```
+
+The [release workflow](.github/workflows/release.yml) then re-runs all checks, verifies the tag matches `package.json`, builds the multi-arch image, pushes it to Docker Hub as `X.Y.Z`, `X.Y` and `latest`, and creates a GitHub release with generated notes. It needs the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 
 ## License
 
