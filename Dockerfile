@@ -1,4 +1,8 @@
-FROM node:22-alpine AS build
+# The build stage always runs natively on the build host: every runtime
+# dependency is pure JavaScript, so node_modules and dist are
+# architecture-independent and npm/tsc never have to run under QEMU
+# emulation (which crashes sporadically with SIGILL on cross builds).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
