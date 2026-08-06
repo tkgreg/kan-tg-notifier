@@ -7,16 +7,14 @@ export interface CardAggregator {
 }
 
 /**
- * Collects webhook events per card for a fixed window after the first one
- * arrives, then hands the whole batch to onFlush. Kan emits one webhook
- * per elementary action ("created", "member added", …), so a single user
- * gesture like creating a card with an assignee produces several
- * deliveries within moments of each other; batching them lets the
- * notification layer describe the card's resulting state in one message
- * instead of one message per delivery.
- *
- * The window is fixed, not sliding: later events join the open batch but
- * never extend it, so notification latency is bounded by windowMs.
+ * Debounces webhook events per card: the batch is flushed once the card
+ * has been quiet for windowMs — every new event for the card merges into
+ * the open batch and restarts the wait. Kan emits one webhook per
+ * elementary action ("created", "member added", …), so a user gesture
+ * like creating a card and then assigning a member produces several
+ * deliveries; the sliding window keeps collecting until the activity
+ * stops and the notification layer then describes the card's resulting
+ * state in a single message.
  */
 export function createCardAggregator(
   windowMs: number,
@@ -42,19 +40,28 @@ export function createCardAggregator(
     onFlush(batch.events);
   };
 
+  // The timers must not keep the process alive on their own; shutdown
+  // flushes explicitly via flushAll().
+  const armTimer = (cardPublicId: string): NodeJS.Timeout => {
+    const timer = setTimeout(() => flush(cardPublicId), windowMs);
+    timer.unref();
+    return timer;
+  };
+
   return {
     push: (event) => {
       const cardPublicId = event.payload.data.card.publicId;
       const batch = pending.get(cardPublicId);
       if (batch) {
         batch.events.push(event);
+        clearTimeout(batch.timer);
+        batch.timer = armTimer(cardPublicId);
         return;
       }
-      const timer = setTimeout(() => flush(cardPublicId), windowMs);
-      // The timer must not keep the process alive on its own; shutdown
-      // flushes explicitly via flushAll().
-      timer.unref();
-      pending.set(cardPublicId, { events: [event], timer });
+      pending.set(cardPublicId, {
+        events: [event],
+        timer: armTimer(cardPublicId),
+      });
     },
     flushAll: () => {
       for (const cardPublicId of [...pending.keys()]) {

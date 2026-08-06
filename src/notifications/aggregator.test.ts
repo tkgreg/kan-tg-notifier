@@ -41,7 +41,7 @@ describe("createCardAggregator", () => {
     expect(batches[0]?.map((event) => event.id)).toEqual([1, 2]);
   });
 
-  it("does not extend the window when later events arrive", () => {
+  it("restarts the wait on every new event for the card", () => {
     const batches: StoredEvent[][] = [];
     const aggregator = createCardAggregator(WINDOW_MS, (events) =>
       batches.push(events),
@@ -50,10 +50,18 @@ describe("createCardAggregator", () => {
     aggregator.push(storedEvent(1, "card.created"));
     vi.advanceTimersByTime(WINDOW_MS - 1);
     aggregator.push(storedEvent(2, "card.member.added"));
+    // The old deadline passes without a flush: the wait was restarted.
     vi.advanceTimersByTime(1);
+    expect(batches).toHaveLength(0);
+    vi.advanceTimersByTime(WINDOW_MS - 2);
+    aggregator.push(storedEvent(3, "card.label.added"));
+    vi.advanceTimersByTime(WINDOW_MS - 1);
+    expect(batches).toHaveLength(0);
 
+    // Quiet for the full window after the last event: flush everything.
+    vi.advanceTimersByTime(1);
     expect(batches).toHaveLength(1);
-    expect(batches[0]?.map((event) => event.id)).toEqual([1, 2]);
+    expect(batches[0]?.map((event) => event.id)).toEqual([1, 2, 3]);
   });
 
   it("keeps different cards in separate batches", () => {

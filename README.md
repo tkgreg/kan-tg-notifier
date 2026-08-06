@@ -26,7 +26,7 @@ flowchart LR
 3. Notifications are then delivered in event order (asynchronously in `persistent` mode, before the webhook response in `serverless` mode — see [Runtime modes](#runtime-modes)):
    - **Group notifications** to every subscribed chat whose event/board filters match. When the affected member has a linked Telegram account, the message mentions it (`@username` or a profile link) instead of the Kan (OIDC) name — disable with `GROUP_MEMBER_MENTIONS=false`.
    - **Personal DMs** to the affected member on `card.member.added` / `card.member.removed`, looked up through the OIDC email → Telegram mapping.
-4. Events about the same card become **one message describing the card's resulting state**. In `persistent` mode, events arriving within `EVENT_AGGREGATION_SECONDS` (default 15) are combined before sending; events arriving later — up to `MESSAGE_UPDATE_WINDOW_SECONDS` (default 10 minutes) after the message was last updated — **edit the already-posted message in place** instead of posting a new one. Creating a card and assigning a member half a minute later still ends up as a single message saying both. Actions that cancel out (a member added and removed again, a label toggled, a field changed back) are omitted entirely. Group messages use a uniform card-state layout:
+4. In `persistent` mode the bot waits until a card has been **quiet for `EVENT_AGGREGATION_SECONDS`** (default 60) before sending: every further event for the same card merges into the pending batch and restarts the wait, so creating a card and then assigning a member produces a single message saying both — however many webhooks that took. Actions that cancel out while waiting (a member added and removed again, a label toggled, a field changed back) are omitted entirely. Group messages use a uniform card-state layout:
 
    > 🆕 **Card title:** Fix the flux capacitor
    > **Board:** Engineering
@@ -193,8 +193,7 @@ Kan webhooks identify affected members by the email of their (OIDC) user account
 | `AUTO_APPROVE_LINKS`                  | no              | `false`                    | Approve `/link` requests without admin review                                                                     |
 | `GROUP_MEMBER_MENTIONS`               | no              | `true`                     | Mention linked members' Telegram accounts in group messages instead of their OIDC names                           |
 | `WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS` | no              | `600`                      | Reject payloads whose signed timestamp deviates more than this from server time (replay protection); `0` disables |
-| `EVENT_AGGREGATION_SECONDS`           | no              | `15`                       | Collect events for the same card this long and send one combined message; `0` sends each event separately. Persistent mode only |
-| `MESSAGE_UPDATE_WINDOW_SECONDS`       | no              | `600`                      | Edit the card's posted message in place when further events arrive within this window after its last update; `0` always posts new messages |
+| `EVENT_AGGREGATION_SECONDS`           | no              | `60`                       | Send one combined message per card once it has been quiet for this long (each new event restarts the wait); `0` sends each event separately. Persistent mode only |
 | `EVENT_LOG_RETENTION_DAYS`            | no              | `30`                       | Delete event log entries older than this; `0` keeps them forever                                                  |
 | `LOG_LEVEL`                           | no              | `info`                     | pino log level                                                                                                    |
 

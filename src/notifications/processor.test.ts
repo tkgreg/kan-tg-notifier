@@ -12,51 +12,24 @@ import { buildPayload, TEST_KAN_BASE_URL } from "../test-utils/fixtures.js";
 import { createSilentLogger } from "../test-utils/logger.js";
 import { createTestDb } from "../test-utils/pglite.js";
 import { processEvent, processEventBatch } from "./processor.js";
-import { createThreadRegistry } from "./threads.js";
 
 interface SentMessage {
   chatId: number;
   text: string;
 }
 
-interface EditedMessage {
-  chatId: number;
-  messageId: number;
-  text: string;
-}
-
-function createFakeNotifier(
-  options: { failFor?: Map<number, Error>; failEdits?: boolean } = {},
-): {
+function createFakeNotifier(failFor: Map<number, Error> = new Map()): {
   notifier: Notifier;
   sent: SentMessage[];
-  edited: EditedMessage[];
 } {
   const sent: SentMessage[] = [];
-  const edited: EditedMessage[] = [];
-  let nextMessageId = 1000;
   return {
     sent,
-    edited,
     notifier: {
       sendHtmlMessage: (chatId, text) => {
-        const failure = options.failFor?.get(chatId);
+        const failure = failFor.get(chatId);
         if (failure) return Promise.reject(failure);
         sent.push({ chatId, text });
-        nextMessageId += 1;
-        return Promise.resolve(nextMessageId);
-      },
-      editHtmlMessage: (chatId, messageId, text) => {
-        if (options.failEdits) {
-          return Promise.reject(
-            new NotificationDeliveryError("message to edit not found", {
-              chatId,
-              attempts: 1,
-              unreachableChat: false,
-            }),
-          );
-        }
-        edited.push({ chatId, messageId, text });
         return Promise.resolve();
       },
     },
@@ -89,17 +62,13 @@ describe("processEvent", () => {
     return id;
   }
 
-  function depsWith(
-    notifier: Notifier,
-    threads?: ProcessorDeps["threads"],
-  ): ProcessorDeps {
+  function depsWith(notifier: Notifier): ProcessorDeps {
     return {
       db: testDb.db,
       notifier,
       logger: createSilentLogger(),
       kanBaseUrl: TEST_KAN_BASE_URL,
       groupMemberMentions: true,
-      ...(threads ? { threads } : {}),
     };
   }
 
@@ -188,9 +157,9 @@ describe("processEvent", () => {
       events: [],
       createdBy: 111,
     });
-    const { notifier, sent } = createFakeNotifier({
-      failFor: new Map([[-100, new Error("network down")]]),
-    });
+    const { notifier, sent } = createFakeNotifier(
+      new Map([[-100, new Error("network down")]]),
+    );
     const payload = buildPayload("card.created");
     const id = await storeEvent(payload);
 
@@ -211,8 +180,8 @@ describe("processEvent", () => {
       events: [],
       createdBy: 111,
     });
-    const { notifier, sent } = createFakeNotifier({
-      failFor: new Map([
+    const { notifier, sent } = createFakeNotifier(
+      new Map([
         [
           -100,
           new NotificationDeliveryError("group upgraded", {
@@ -223,7 +192,7 @@ describe("processEvent", () => {
           }),
         ],
       ]),
-    });
+    );
     const payload = buildPayload("card.created");
     const id = await storeEvent(payload);
 
@@ -282,127 +251,6 @@ describe("processEvent", () => {
     });
   });
 
-  it("edits the earlier message when follow-up events arrive within the window", async () => {
-    await subscriptionRepo.upsert(testDb.db, {
-      chatId: -100,
-      chatType: "supergroup",
-      chatTitle: "Team",
-      allEvents: true,
-      events: [],
-      createdBy: 111,
-    });
-    const { notifier, sent, edited } = createFakeNotifier();
-    const threads = createThreadRegistry(600_000);
-    const deps = depsWith(notifier, threads);
-
-    const created = buildPayload("card.created");
-    const createdId = await storeEvent(created);
-    await processEventBatch(deps, [{ id: createdId, payload: created }]);
-
-    const assigned = buildPayload("card.member.added", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const assignedId = await storeEvent(assigned);
-    await processEventBatch(deps, [{ id: assignedId, payload: assigned }]);
-
-    // One original post, then an in-place edit instead of a second post.
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.text).toContain("<b>Actions:</b> Created");
-    expect(edited).toHaveLength(1);
-    expect(edited[0]?.chatId).toBe(-100);
-    expect(edited[0]?.text).toContain("<b>Actions:</b> Created, Assigned");
-    expect(edited[0]?.text).toContain("<b>Members:</b> Bob");
-    expect(await eventRow(assignedId)).toMatchObject({ status: "processed" });
-  });
-
-  it("does not repeat the DM for events already rendered in the thread", async () => {
-    await mappingRepo.create(testDb.db, {
-      telegramUserId: 555,
-      telegramUsername: "bob",
-      kanEmail: "bob@corp.com",
-      status: "approved",
-    });
-    const { notifier, sent } = createFakeNotifier();
-    const threads = createThreadRegistry(600_000);
-    const deps = depsWith(notifier, threads);
-
-    const assigned = buildPayload("card.member.added", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const assignedId = await storeEvent(assigned);
-    await processEventBatch(deps, [{ id: assignedId, payload: assigned }]);
-
-    const labeled = buildPayload("card.label.added", {
-      label: { id: "label1234567", name: "Bug", colourCode: "#f00" },
-    });
-    const labeledId = await storeEvent(labeled);
-    await processEventBatch(deps, [{ id: labeledId, payload: labeled }]);
-
-    // Only the DM from the first batch; the label event triggers none.
-    const dms = sent.filter((message) => message.chatId === 555);
-    expect(dms).toHaveLength(1);
-  });
-
-  it("posts a new message once the update window has expired", async () => {
-    await subscriptionRepo.upsert(testDb.db, {
-      chatId: -100,
-      chatType: "supergroup",
-      chatTitle: "Team",
-      allEvents: true,
-      events: [],
-      createdBy: 111,
-    });
-    const { notifier, sent, edited } = createFakeNotifier();
-    let nowMs = 0;
-    const threads = createThreadRegistry(600_000, () => nowMs);
-    const deps = depsWith(notifier, threads);
-
-    const created = buildPayload("card.created");
-    const createdId = await storeEvent(created);
-    await processEventBatch(deps, [{ id: createdId, payload: created }]);
-
-    nowMs = 601_000;
-    const assigned = buildPayload("card.member.added", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const assignedId = await storeEvent(assigned);
-    await processEventBatch(deps, [{ id: assignedId, payload: assigned }]);
-
-    expect(edited).toHaveLength(0);
-    expect(sent).toHaveLength(2);
-    expect(sent[1]?.text).toContain("<b>Actions:</b> Assigned");
-    expect(sent[1]?.text).not.toContain("Created");
-  });
-
-  it("falls back to a new message when the edit fails", async () => {
-    await subscriptionRepo.upsert(testDb.db, {
-      chatId: -100,
-      chatType: "supergroup",
-      chatTitle: "Team",
-      allEvents: true,
-      events: [],
-      createdBy: 111,
-    });
-    const { notifier, sent, edited } = createFakeNotifier({ failEdits: true });
-    const threads = createThreadRegistry(600_000);
-    const deps = depsWith(notifier, threads);
-
-    const created = buildPayload("card.created");
-    const createdId = await storeEvent(created);
-    await processEventBatch(deps, [{ id: createdId, payload: created }]);
-
-    const assigned = buildPayload("card.member.added", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const assignedId = await storeEvent(assigned);
-    await processEventBatch(deps, [{ id: assignedId, payload: assigned }]);
-
-    expect(edited).toHaveLength(0);
-    expect(sent).toHaveLength(2);
-    expect(sent[1]?.text).toContain("<b>Actions:</b> Created, Assigned");
-    expect(await eventRow(assignedId)).toMatchObject({ status: "processed" });
-  });
-
   it("removes the subscription of a chat that blocked the bot", async () => {
     await subscriptionRepo.upsert(testDb.db, {
       chatId: -100,
@@ -412,8 +260,8 @@ describe("processEvent", () => {
       events: [],
       createdBy: 111,
     });
-    const { notifier } = createFakeNotifier({
-      failFor: new Map([
+    const { notifier } = createFakeNotifier(
+      new Map([
         [
           -100,
           new NotificationDeliveryError("bot was kicked", {
@@ -423,7 +271,7 @@ describe("processEvent", () => {
           }),
         ],
       ]),
-    });
+    );
     const payload = buildPayload("card.created");
     const id = await storeEvent(payload);
 

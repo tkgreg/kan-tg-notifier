@@ -82,13 +82,7 @@ const envSchema = z
       .int()
       .min(0)
       .max(300)
-      .default(15),
-    MESSAGE_UPDATE_WINDOW_SECONDS: z.coerce
-      .number()
-      .int()
-      .min(0)
-      .max(86400)
-      .default(600),
+      .default(60),
     EVENT_LOG_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error", "fatal"])
@@ -139,18 +133,13 @@ export interface AppConfig {
   groupMemberMentions: boolean;
   webhookTimestampToleranceSeconds: number;
   /**
-   * How long to collect webhook events for the same card before rendering
-   * them as one combined message. 0 sends every event separately. Only
-   * effective in persistent mode: serverless instances may be frozen
-   * between requests and cannot hold a timer.
+   * Quiet period per card before its collected events are rendered as
+   * one combined message; every new event restarts the wait. 0 sends
+   * every event separately. Only effective in persistent mode:
+   * serverless instances may be frozen between requests and cannot hold
+   * a timer.
    */
   eventAggregationSeconds: number;
-  /**
-   * For how long after the last update a card's posted message is edited
-   * in place when further events arrive, instead of posting a new one.
-   * 0 posts a new message for every batch.
-   */
-  messageUpdateWindowSeconds: number;
   eventLogRetentionDays: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 }
@@ -203,7 +192,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     webhookTimestampToleranceSeconds:
       parsed.data.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
     eventAggregationSeconds: parsed.data.EVENT_AGGREGATION_SECONDS,
-    messageUpdateWindowSeconds: parsed.data.MESSAGE_UPDATE_WINDOW_SECONDS,
     eventLogRetentionDays: parsed.data.EVENT_LOG_RETENTION_DAYS,
     logLevel: parsed.data.LOG_LEVEL,
   };

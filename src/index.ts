@@ -15,7 +15,6 @@ import { kanWebhookPayloadSchema } from "./kan/events.js";
 import { createLogger } from "./logger.js";
 import { createCardAggregator } from "./notifications/aggregator.js";
 import { processEvent, processEventBatch } from "./notifications/processor.js";
-import { createThreadRegistry } from "./notifications/threads.js";
 import { createSerialQueue } from "./notifications/queue.js";
 import { createWebhookServer } from "./server.js";
 import { createBot, publishBotCommands } from "./telegram/bot.js";
@@ -352,10 +351,6 @@ async function main(): Promise<void> {
       logger: logger.child({ component: "processor" }),
       kanBaseUrl: config.kanBaseUrl,
       groupMemberMentions: config.groupMemberMentions,
-      // In serverless mode the registry only survives within one
-      // instance, so late events may post new messages instead of
-      // editing — a best-effort degradation, not an error.
-      threads: createThreadRegistry(config.messageUpdateWindowSeconds * 1000),
     },
   };
 
