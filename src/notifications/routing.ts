@@ -1,8 +1,12 @@
 import type { ChatSubscription, UserMapping } from "../db/schema.js";
 import type { KanWebhookPayload } from "../kan/events.js";
-import type { FormatOptions } from "./format.js";
+import type { MemberMention } from "./format.js";
 import { normalizeEmail } from "../db/repository/mapping.repo.js";
-import { formatEventMessage, formatMemberDirectMessage } from "./format.js";
+import {
+  formatCardBatchMessage,
+  formatMemberDirectMessage,
+  netMemberChanges,
+} from "./format.js";
 
 export interface Notification {
   chatId: number;
@@ -30,40 +34,35 @@ export function matchesSubscription(
   return eventMatches && boardMatches;
 }
 
-const MEMBER_EVENTS: readonly KanWebhookPayload["event"][] = [
-  "card.member.added",
-  "card.member.removed",
-];
-
-function findAffectedMemberMapping(
-  payload: KanWebhookPayload,
+function findApprovedMapping(
+  email: string | undefined,
   approvedMappings: readonly UserMapping[],
 ): UserMapping | undefined {
-  if (!MEMBER_EVENTS.includes(payload.event)) return undefined;
-
-  const memberEmail = payload.data.member?.email;
-  if (!memberEmail) return undefined;
-
-  const normalized = normalizeEmail(memberEmail);
+  if (!email) return undefined;
+  const normalized = normalizeEmail(email);
   return approvedMappings.find(
-    (mapping) => mapping.status === "approved" && mapping.kanEmail === normalized,
+    (mapping) =>
+      mapping.status === "approved" && mapping.kanEmail === normalized,
   );
 }
 
 /**
- * Decide which Telegram chats must be notified about a webhook payload.
+ * Decide which Telegram chats must be notified about a batch of webhook
+ * events concerning one card (a batch of one is the common case).
  *
  * Rules:
- * - Every subscription matching the event and board filters gets the
- *   generic group message. When the affected member has an approved
- *   mapping and mentionLinkedMembers is on, the group message mentions
- *   their concrete Telegram account instead of the Kan (OIDC) name.
- * - On card.member.added / card.member.removed, the affected member
- *   (looked up by their mapped Kan email) gets a personalized direct
- *   message instead of — never in addition to — the generic one.
+ * - Every subscription matching the event and board filters gets one
+ *   group message summarizing the events that passed its filters. When
+ *   an affected member has an approved mapping and mentionLinkedMembers
+ *   is on, the message mentions their concrete Telegram account instead
+ *   of the Kan (OIDC) name.
+ * - Members whose net assignment changed (added or removed overall, after
+ *   cancelling an add+remove pair within the batch) and who have an
+ *   approved mapping get a personalized direct message instead of —
+ *   never in addition to — the generic one.
  */
-export function routeEvent(
-  payload: KanWebhookPayload,
+export function routeEventBatch(
+  payloads: readonly KanWebhookPayload[],
   subscriptions: readonly ChatSubscription[],
   approvedMappings: readonly UserMapping[],
   kanBaseUrl: string,
@@ -72,35 +71,86 @@ export function routeEvent(
   const notifications: Notification[] = [];
   const directChatIds = new Set<number>();
 
-  const memberMapping = findAffectedMemberMapping(payload, approvedMappings);
-  if (memberMapping) {
+  for (const change of netMemberChanges(payloads)) {
+    const mapping = findApprovedMapping(
+      change.payload.data.member?.email,
+      approvedMappings,
+    );
+    if (!mapping) continue;
     notifications.push({
-      chatId: memberMapping.telegramUserId,
-      text: formatMemberDirectMessage(payload, kanBaseUrl),
+      chatId: mapping.telegramUserId,
+      text: formatMemberDirectMessage(change.payload, kanBaseUrl),
       kind: "direct",
     });
-    directChatIds.add(memberMapping.telegramUserId);
+    directChatIds.add(mapping.telegramUserId);
   }
 
-  const formatOptions: FormatOptions =
-    options.mentionLinkedMembers && memberMapping
-      ? {
-          memberMention: {
-            telegramUserId: memberMapping.telegramUserId,
-            telegramUsername: memberMapping.telegramUsername,
-          },
-        }
-      : {};
-  const groupText = formatEventMessage(payload, kanBaseUrl, formatOptions);
+  const memberMentionFor = options.mentionLinkedMembers
+    ? (email: string): MemberMention | undefined => {
+        const mapping = findApprovedMapping(email, approvedMappings);
+        if (!mapping) return undefined;
+        return {
+          telegramUserId: mapping.telegramUserId,
+          telegramUsername: mapping.telegramUsername,
+        };
+      }
+    : undefined;
+
+  // Different subscriptions may filter the batch down to different
+  // subsets; identical subsets share one formatted message.
+  const textBySubset = new Map<string, string | undefined>();
   for (const subscription of subscriptions) {
     if (directChatIds.has(subscription.chatId)) continue;
-    if (!matchesSubscription(subscription, payload)) continue;
+
+    const includedIndexes: number[] = [];
+    payloads.forEach((payload, index) => {
+      if (matchesSubscription(subscription, payload)) {
+        includedIndexes.push(index);
+      }
+    });
+    if (includedIndexes.length === 0) continue;
+
+    const subsetKey = includedIndexes.join(",");
+    if (!textBySubset.has(subsetKey)) {
+      const subset = includedIndexes.flatMap((index) => {
+        const payload = payloads[index];
+        return payload ? [payload] : [];
+      });
+      textBySubset.set(
+        subsetKey,
+        formatCardBatchMessage(
+          subset,
+          kanBaseUrl,
+          memberMentionFor ? { memberMentionFor } : {},
+        ),
+      );
+    }
+    const text = textBySubset.get(subsetKey);
+    if (text === undefined) continue;
+
     notifications.push({
       chatId: subscription.chatId,
-      text: groupText,
+      text,
       kind: "group",
     });
   }
 
   return notifications;
+}
+
+/** Single-event convenience wrapper around routeEventBatch. */
+export function routeEvent(
+  payload: KanWebhookPayload,
+  subscriptions: readonly ChatSubscription[],
+  approvedMappings: readonly UserMapping[],
+  kanBaseUrl: string,
+  options: RoutingOptions = { mentionLinkedMembers: true },
+): Notification[] {
+  return routeEventBatch(
+    [payload],
+    subscriptions,
+    approvedMappings,
+    kanBaseUrl,
+    options,
+  );
 }

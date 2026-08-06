@@ -11,7 +11,7 @@ import { NotificationDeliveryError } from "../telegram/notifier.js";
 import { buildPayload, TEST_KAN_BASE_URL } from "../test-utils/fixtures.js";
 import { createSilentLogger } from "../test-utils/logger.js";
 import { createTestDb } from "../test-utils/pglite.js";
-import { processEvent } from "./processor.js";
+import { processEvent, processEventBatch } from "./processor.js";
 
 interface SentMessage {
   chatId: number;
@@ -48,10 +48,17 @@ describe("processEvent", () => {
   });
 
   let hashCounter = 0;
-  async function storeEvent(payload: Parameters<typeof eventRepo.insertReceived>[1]) {
+  async function storeEvent(
+    payload: Parameters<typeof eventRepo.insertReceived>[1],
+  ) {
     hashCounter += 1;
-    const id = await eventRepo.insertReceived(testDb.db, payload, `hash-${hashCounter}`);
-    if (id === undefined) throw new Error("unexpected duplicate event in test setup");
+    const id = await eventRepo.insertReceived(
+      testDb.db,
+      payload,
+      `hash-${hashCounter}`,
+    );
+    if (id === undefined)
+      throw new Error("unexpected duplicate event in test setup");
     return id;
   }
 
@@ -198,6 +205,49 @@ describe("processEvent", () => {
     expect(await eventRow(id)).toMatchObject({
       status: "processed",
       notificationsSent: 1,
+    });
+  });
+
+  it("sends one combined message for a batch and marks every event", async () => {
+    await subscriptionRepo.upsert(testDb.db, {
+      chatId: -100,
+      chatType: "supergroup",
+      chatTitle: "Team",
+      allEvents: true,
+      events: [],
+      createdBy: 111,
+    });
+    await mappingRepo.create(testDb.db, {
+      telegramUserId: 555,
+      telegramUsername: "bob",
+      kanEmail: "bob@corp.com",
+      status: "approved",
+    });
+    const { notifier, sent } = createFakeNotifier();
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const createdId = await storeEvent(created);
+    const assignedId = await storeEvent(assigned);
+
+    await processEventBatch(depsWith(notifier), [
+      { id: createdId, payload: created },
+      { id: assignedId, payload: assigned },
+    ]);
+
+    // One DM to the assignee plus one combined group message.
+    expect(sent.map((message) => message.chatId).sort()).toEqual([-100, 555]);
+    const group = sent.find((message) => message.chatId === -100);
+    expect(group?.text).toContain("created");
+    expect(group?.text).toContain("Assigned @bob");
+    expect(await eventRow(createdId)).toMatchObject({
+      status: "processed",
+      notificationsSent: 2,
+    });
+    expect(await eventRow(assignedId)).toMatchObject({
+      status: "processed",
+      notificationsSent: 2,
     });
   });
 

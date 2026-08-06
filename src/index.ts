@@ -13,7 +13,8 @@ import { runMigrations } from "./db/migrate.js";
 import * as eventRepo from "./db/repository/event.repo.js";
 import { kanWebhookPayloadSchema } from "./kan/events.js";
 import { createLogger } from "./logger.js";
-import { processEvent } from "./notifications/processor.js";
+import { createCardAggregator } from "./notifications/aggregator.js";
+import { processEvent, processEventBatch } from "./notifications/processor.js";
 import { createSerialQueue } from "./notifications/queue.js";
 import { createWebhookServer } from "./server.js";
 import { createBot, publishBotCommands } from "./telegram/bot.js";
@@ -131,9 +132,19 @@ async function runPersistent(runtime: Runtime): Promise<void> {
     );
   });
 
+  // Kan sends one webhook per elementary action, so creating a card with
+  // an assignee arrives as several deliveries within moments. Collect
+  // events per card for a short window and deliver one combined message.
+  const aggregator = createCardAggregator(
+    config.eventAggregationSeconds * 1000,
+    (events) => {
+      queue.push(() => processEventBatch(processorDeps, events));
+    },
+  );
+
   const pending = await loadRecoverableEvents(db, logger, RECOVERY_BATCH_SIZE);
   for (const event of pending) {
-    queue.push(() => processEvent(processorDeps, event.id, event.payload));
+    aggregator.push(event);
   }
   startRetentionSweep(db, config.eventLogRetentionDays, logger);
 
@@ -148,7 +159,7 @@ async function runPersistent(runtime: Runtime): Promise<void> {
         payloadHash,
       );
       if (eventLogId === undefined) return "duplicate";
-      queue.push(() => processEvent(processorDeps, eventLogId, payload));
+      aggregator.push({ id: eventLogId, payload });
       return "accepted";
     },
   });
@@ -179,6 +190,7 @@ async function runPersistent(runtime: Runtime): Promise<void> {
     logger.info({ signal }, "Shutting down");
     await bot.stop();
     await server.close();
+    aggregator.flushAll();
     await queue.onIdle();
     await closeDb();
     process.exit(0);
