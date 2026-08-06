@@ -6,7 +6,6 @@ import {
   escapeHtml,
   formatCardBatchMessage,
   formatChanges,
-  formatEventMessage,
   formatMemberDirectMessage,
   maskEmail,
   netMemberChanges,
@@ -72,17 +71,29 @@ describe("chunkLines", () => {
   });
 });
 
-describe("formatEventMessage", () => {
-  it("renders card.created with actor, link and context", () => {
-    const text = formatEventMessage(
-      buildPayload("card.created"),
+describe("formatChanges", () => {
+  it("skips the listId change (covered by the Column line)", () => {
+    const lines = formatChanges({
+      listId: { from: "list-a", to: "list-b" },
+    });
+    expect(lines).toHaveLength(0);
+  });
+});
+
+describe("formatCardBatchMessage (single event)", () => {
+  it("renders the card-state layout for card.created", () => {
+    const text = formatCardBatchMessage(
+      [buildPayload("card.created")],
       TEST_KAN_BASE_URL,
     );
-    expect(text).toContain("<b>Alice</b>");
     expect(text).toContain(
-      `<a href="${TEST_KAN_BASE_URL}/cards/card12345678">Fix the flux capacitor</a>`,
+      `🆕 <b>Card title:</b> <a href="${TEST_KAN_BASE_URL}/cards/card12345678">Fix the flux capacitor</a>`,
     );
-    expect(text).toContain("Engineering · In Progress");
+    expect(text).toContain("<b>Board:</b> Engineering");
+    expect(text).toContain("<b>Column:</b> In Progress");
+    expect(text).toContain("<b>Updated at:</b> 2026-08-02 10:00 UTC");
+    expect(text).toContain("<b>By:</b> Alice");
+    expect(text).toContain("<b>Actions:</b> Created");
   });
 
   it("escapes HTML in card titles", () => {
@@ -97,7 +108,7 @@ describe("formatEventMessage", () => {
         boardId: "board1234567",
       },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
     expect(text).not.toContain("<script>");
     expect(text).toContain("&lt;script&gt;");
   });
@@ -105,41 +116,45 @@ describe("formatEventMessage", () => {
   it("falls back to 'Someone' when the actor is missing", () => {
     const payload = buildPayload("card.deleted");
     delete payload.data.user;
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
-    expect(text).toContain("<b>Someone</b>");
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
+    expect(text).toContain("<b>By:</b> Someone");
   });
 
   it("renders comment text as a blockquote", () => {
     const payload = buildPayload("card.comment.created", {
       comment: { id: "cmnt12345678", text: "Looks good <b>to me</b>" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
+    expect(text).toContain("<b>Actions:</b> Commented");
+    expect(text).toContain("💬");
     expect(text).toContain(
       "<blockquote>Looks good &lt;b&gt;to me&lt;/b&gt;</blockquote>",
     );
   });
 
-  it("renders label events with the label name", () => {
+  it("renders label events on the Labels line", () => {
     const payload = buildPayload("card.label.added", {
       label: { id: "labl12345678", name: "Urgent", colourCode: "#ff0000" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
-    expect(text).toContain("added label <b>Urgent</b>");
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
+    expect(text).toContain("<b>Labels:</b> <b>Urgent</b>");
+    expect(text).toContain("<b>Actions:</b> Label added");
   });
 
-  it("renders member events with the member name", () => {
+  it("renders member events on the Members line", () => {
     const payload = buildPayload("card.member.removed", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
-    expect(text).toContain("removed Bob from");
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
+    expect(text).toContain("<b>Members:</b> Bob (removed)");
+    expect(text).toContain("<b>Actions:</b> Unassigned");
   });
 
-  it("masks the email of members without a display name in group messages", () => {
+  it("masks the email of members without a display name", () => {
     const payload = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: null, email: "bob@corp.com" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
     expect(text).not.toContain("bob@corp.com");
     expect(text).toContain("b***@corp.com");
   });
@@ -148,30 +163,37 @@ describe("formatEventMessage", () => {
     const payload = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL, {
-      memberMention: { telegramUserId: 555, telegramUsername: "bob_tg" },
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL, {
+      memberMentionFor: () => ({
+        telegramUserId: 555,
+        telegramUsername: "bob_tg",
+      }),
     });
-    expect(text).toContain("assigned @bob_tg to");
-    expect(text).not.toContain("assigned Bob to");
+    expect(text).toContain("<b>Members:</b> @bob_tg");
+    expect(text).not.toContain("<b>Members:</b> Bob");
   });
 
   it("falls back to a tg://user text mention when the member has no username", () => {
     const payload = buildPayload("card.member.removed", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL, {
-      memberMention: { telegramUserId: 555, telegramUsername: null },
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL, {
+      memberMentionFor: () => ({
+        telegramUserId: 555,
+        telegramUsername: null,
+      }),
     });
     expect(text).toContain('<a href="tg://user?id=555">Bob</a>');
   });
 
-  it("renders card.moved with the target list", () => {
-    const text = formatEventMessage(
-      buildPayload("card.moved"),
+  it("marks a moved card with the target column", () => {
+    const text = formatCardBatchMessage(
+      [buildPayload("card.moved")],
       TEST_KAN_BASE_URL,
     );
-    expect(text).toContain("moved");
-    expect(text).toContain("to <i>In Progress</i>");
+    expect(text).toContain("📦");
+    expect(text).toContain("<b>Column:</b> In Progress");
+    expect(text).toContain("<b>Actions:</b> Moved");
   });
 
   it("renders change lines for card.updated", () => {
@@ -182,50 +204,28 @@ describe("formatEventMessage", () => {
         dueDate: { from: null, to: "2026-08-10T00:00:00.000Z" },
       },
     });
-    const text = formatEventMessage(payload, TEST_KAN_BASE_URL);
+    const text = formatCardBatchMessage([payload], TEST_KAN_BASE_URL);
+    expect(text).toContain("<b>Actions:</b> Updated");
     expect(text).toContain("• Title: Old title → New title");
     expect(text).toContain("• Description updated");
     expect(text).toContain("• Due date: none → 2026-08-10");
   });
-});
 
-describe("formatChanges", () => {
-  it("skips the listId change (covered by the card.moved header)", () => {
-    const lines = formatChanges({
-      listId: { from: "list-a", to: "list-b" },
-    });
-    expect(lines).toHaveLength(0);
-  });
-});
-
-describe("formatMemberDirectMessage", () => {
-  it("addresses the member directly on assignment", () => {
-    const payload = buildPayload("card.member.added", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const text = formatMemberDirectMessage(payload, TEST_KAN_BASE_URL);
-    expect(text).toContain("assigned you to");
-    expect(text).toContain("<b>Alice</b>");
-  });
-
-  it("addresses the member directly on removal", () => {
-    const payload = buildPayload("card.member.removed", {
-      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
-    });
-    const text = formatMemberDirectMessage(payload, TEST_KAN_BASE_URL);
-    expect(text).toContain("removed you from");
-  });
-});
-
-describe("formatCardBatchMessage", () => {
-  it("delegates a single-event batch to the per-event format", () => {
-    const payload = buildPayload("card.created");
-    expect(formatCardBatchMessage([payload], TEST_KAN_BASE_URL)).toBe(
-      formatEventMessage(payload, TEST_KAN_BASE_URL),
+  it("shows a deleted card's title without a link", () => {
+    const text = formatCardBatchMessage(
+      [buildPayload("card.deleted")],
+      TEST_KAN_BASE_URL,
     );
+    expect(text).toContain(
+      "🗑 <b>Card title:</b> <b>Fix the flux capacitor</b>",
+    );
+    expect(text).not.toContain("<a href");
+    expect(text).toContain("<b>Actions:</b> Deleted");
   });
+});
 
-  it("merges created + member.added into one message", () => {
+describe("formatCardBatchMessage (multi-event batch)", () => {
+  it("merges created + member.added into one card-state message", () => {
     const created = buildPayload("card.created");
     const assigned = buildPayload("card.member.added", {
       member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
@@ -233,9 +233,9 @@ describe("formatCardBatchMessage", () => {
 
     const text = formatCardBatchMessage([created, assigned], TEST_KAN_BASE_URL);
 
-    expect(text).toContain("created");
-    expect(text).toContain("👤 Assigned Bob");
     expect(text?.split("\n")[0]).toContain("🆕");
+    expect(text).toContain("<b>Members:</b> Bob");
+    expect(text).toContain("<b>Actions:</b> Created, Assigned");
   });
 
   it("mentions the linked member through memberMentionFor", () => {
@@ -255,7 +255,7 @@ describe("formatCardBatchMessage", () => {
       },
     );
 
-    expect(text).toContain("👤 Assigned @bobtg");
+    expect(text).toContain("<b>Members:</b> @bobtg");
   });
 
   it("uses the latest title for the card link", () => {
@@ -268,6 +268,7 @@ describe("formatCardBatchMessage", () => {
     const text = formatCardBatchMessage([created, updated], TEST_KAN_BASE_URL);
 
     expect(text).toContain(">New title</a>");
+    expect(text).toContain("<b>Actions:</b> Created, Updated");
   });
 
   it("omits a member who was added and removed within the batch", () => {
@@ -281,8 +282,9 @@ describe("formatCardBatchMessage", () => {
       TEST_KAN_BASE_URL,
     );
 
-    expect(text).toContain("created");
+    expect(text).toContain("<b>Actions:</b> Created");
     expect(text).not.toContain("Bob");
+    expect(text).not.toContain("Members:");
   });
 
   it("omits a label that was added and removed within the batch", () => {
@@ -300,6 +302,7 @@ describe("formatCardBatchMessage", () => {
 
     expect(text).not.toContain("Bug");
     expect(text).toContain("still here");
+    expect(text).toContain("<b>Actions:</b> Commented");
   });
 
   it("returns undefined when everything cancelled out", () => {
@@ -325,12 +328,12 @@ describe("formatCardBatchMessage", () => {
 
     const text = formatCardBatchMessage([first, second], TEST_KAN_BASE_URL);
 
-    expect(text).toContain("✏️");
+    expect(text).toContain("<b>Actions:</b> Updated");
     expect(text).not.toContain("Title:");
     expect(text).toContain("Due date: none → 2026-09-01");
   });
 
-  it("reports only the deletion when the card was deleted", () => {
+  it("lists the deletion alongside earlier actions and drops details", () => {
     const updated = buildPayload("card.updated", {
       changes: { title: { from: "A", to: "B" } },
     });
@@ -345,21 +348,21 @@ describe("formatCardBatchMessage", () => {
     );
 
     expect(text).toContain("🗑");
-    expect(text).toContain("deleted");
-    expect(text).not.toContain("Assigned");
+    expect(text).toContain("<b>Actions:</b> Updated, Assigned, Deleted");
     expect(text).not.toContain("Title:");
+    expect(text).not.toContain("<a href");
   });
 
-  it("says created and deleted when the whole lifecycle fits the batch", () => {
+  it("lists Created and Deleted when the whole lifecycle fits the batch", () => {
     const created = buildPayload("card.created");
     const deleted = buildPayload("card.deleted");
 
     const text = formatCardBatchMessage([created, deleted], TEST_KAN_BASE_URL);
 
-    expect(text).toContain("created and deleted");
+    expect(text).toContain("<b>Actions:</b> Created, Deleted");
   });
 
-  it("uses the final list for a card moved twice", () => {
+  it("uses the final column for a card moved twice", () => {
     const firstMove = buildPayload("card.moved", {
       list: { id: "list00000001", name: "Doing" },
     });
@@ -372,8 +375,8 @@ describe("formatCardBatchMessage", () => {
       TEST_KAN_BASE_URL,
     );
 
-    expect(text).toContain("moved");
-    expect(text).toContain("to <i>Done</i>");
+    expect(text).toContain("<b>Column:</b> Done");
+    expect(text).toContain("<b>Actions:</b> Moved");
     expect(text).not.toContain("Doing");
   });
 
@@ -389,7 +392,7 @@ describe("formatCardBatchMessage", () => {
       TEST_KAN_BASE_URL,
     );
 
-    expect(text).toContain("💬");
+    expect(text).toContain("<b>Actions:</b> Commented");
     expect(text).toContain("final version");
     expect(text).not.toContain("first draft");
   });
@@ -406,6 +409,7 @@ describe("formatCardBatchMessage", () => {
     );
 
     expect(text).not.toContain("oops");
+    expect(text).toContain("<b>Actions:</b> Created");
   });
 
   it("names both actors when different people acted", () => {
@@ -417,7 +421,7 @@ describe("formatCardBatchMessage", () => {
 
     const text = formatCardBatchMessage([created, assigned], TEST_KAN_BASE_URL);
 
-    expect(text).toContain("<b>Alice and Carol</b>");
+    expect(text).toContain("<b>By:</b> Alice and Carol");
   });
 });
 
@@ -435,5 +439,24 @@ describe("netMemberChanges", () => {
     expect(changes).toHaveLength(1);
     expect(changes[0]?.net).toBe(1);
     expect(changes[0]?.payload.data.member?.email).toBe("dan@corp.com");
+  });
+});
+
+describe("formatMemberDirectMessage", () => {
+  it("addresses the member directly on assignment", () => {
+    const payload = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const text = formatMemberDirectMessage(payload, TEST_KAN_BASE_URL);
+    expect(text).toContain("assigned you to");
+    expect(text).toContain("<b>Alice</b>");
+  });
+
+  it("addresses the member directly on removal", () => {
+    const payload = buildPayload("card.member.removed", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+    const text = formatMemberDirectMessage(payload, TEST_KAN_BASE_URL);
+    expect(text).toContain("removed you from");
   });
 });

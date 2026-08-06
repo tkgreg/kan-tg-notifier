@@ -26,7 +26,15 @@ flowchart LR
 3. Notifications are then delivered in event order (asynchronously in `persistent` mode, before the webhook response in `serverless` mode — see [Runtime modes](#runtime-modes)):
    - **Group notifications** to every subscribed chat whose event/board filters match. When the affected member has a linked Telegram account, the message mentions it (`@username` or a profile link) instead of the Kan (OIDC) name — disable with `GROUP_MEMBER_MENTIONS=false`.
    - **Personal DMs** to the affected member on `card.member.added` / `card.member.removed`, looked up through the OIDC email → Telegram mapping.
-4. In `persistent` mode, events for the same card arriving within `EVENT_AGGREGATION_SECONDS` (default 15) are combined into **one message describing the card's resulting state** — creating a card and assigning a member produces a single "created … assigned" message instead of two. Actions that cancel out within the window (a member added and removed again, a label toggled, a field changed back) are omitted entirely.
+4. In `persistent` mode, events for the same card arriving within `EVENT_AGGREGATION_SECONDS` (default 15) are combined into **one message describing the card's resulting state** — creating a card and assigning a member produces a single message instead of two. Actions that cancel out within the window (a member added and removed again, a label toggled, a field changed back) are omitted entirely. Group messages use a uniform card-state layout:
+
+   > 🆕 **Card title:** Fix the flux capacitor
+   > **Board:** Engineering
+   > **Column:** In Progress
+   > **Members:** @bob
+   > **Updated at:** 2026-08-02 10:00 UTC
+   > **By:** Alice
+   > **Actions:** Created, Assigned
 
 ### Supported events
 

@@ -14,15 +14,28 @@ For each batch (a batch of one is the common case):
 2. **Group messages** — every chat subscription whose event filter and board filter match gets one combined message covering the events that passed its filters. When the affected member has an approved mapping and `GROUP_MEMBER_MENTIONS` is on (default), the message mentions their concrete Telegram account — `@username`, or a `tg://user?id=…` text mention when they have no public username — instead of the Kan (OIDC) display name.
 3. A chat never receives both: the personal DM replaces the generic message for that chat ID.
 
-## Batch messages (`formatCardBatchMessage`)
+## Card-state messages (`formatCardBatchMessage`)
 
-A multi-event batch is rendered as one message describing the card's **resulting state**: a header for the primary action (created > moved > updated/commented), then detail lines — merged field changes (first `from` → last `to`, round-trips dropped), net label and member changes, surviving comments (latest text). A `card.deleted` event collapses the whole message to the deletion. When everything cancelled out (e.g. a label added and removed again), no message is sent at all.
+Every group message — single event or aggregated batch — uses one uniform layout describing the card's **resulting state**:
+
+```
+🆕 Card title: <link>
+Board: Engineering
+Column: In Progress
+Members: @bob
+Labels: Bug
+Updated at: 2026-08-02 10:00 UTC
+By: Alice
+Actions: Created, Assigned
+```
+
+The emoji reflects the primary action (🗑 deleted > 🆕 created > 📦 moved > 💬 comment-only > ✏️ everything else); the `Members:`/`Labels:` lines list net changes (removed items get a `(removed)` suffix); `Updated at:` is the last event's signed timestamp; `Actions:` names everything that net-happened. Detail lines follow when relevant: merged field changes (first `from` → last `to`, round-trips dropped) and surviving comments as blockquotes (latest text). A deleted card keeps the layout but loses its link and detail lines. When everything cancelled out (e.g. a label added and removed again), no message is sent at all.
 
 ## Formatting (`src/notifications/format.ts`, pure)
 
 - Telegram HTML parse mode; all user content is escaped (`&`, `<`, `>`) and long text truncated without splitting surrogate pairs (card titles 200 chars, comments 300 chars). Member emails are masked (`b***@corp.com`) in group messages when the member has no display name.
-- The card title deep-links to `KAN_BASE_URL/cards/<publicId>`.
-- Event-specific rendering: comments as `<blockquote>`, labels/members named in the header, `changes` of `card.updated` rendered as bullet lines (title from → to, "description updated", due date from → to). The `listId` change is covered by the `card.moved` header ("moved … to <list>").
+- The card title deep-links to `KAN_BASE_URL/cards/<publicId>` (plain bold title when the card was deleted).
+- Comments render as `<blockquote>`, `changes` of `card.updated` as bullet lines (title from → to, "description updated", due date from → to). The `listId` change is covered by the `Column:` line.
 
 ## Delivery (`src/telegram/notifier.ts`)
 

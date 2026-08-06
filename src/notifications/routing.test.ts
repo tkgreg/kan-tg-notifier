@@ -104,7 +104,7 @@ describe("routeEvent", () => {
       { mentionLinkedMembers: false },
     );
     const group = notifications.find((n) => n.chatId === -100);
-    expect(group?.text).toContain("assigned Bob to");
+    expect(group?.text).toContain("<b>Members:</b> Bob");
     expect(group?.text).not.toContain("@bob_tg");
   });
 
@@ -176,8 +176,10 @@ describe("routeEventBatch", () => {
 
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.chatId).toBe(-100);
-    expect(notifications[0]?.text).toContain("created");
-    expect(notifications[0]?.text).toContain("Assigned Bob");
+    expect(notifications[0]?.text).toContain(
+      "<b>Actions:</b> Created, Assigned",
+    );
+    expect(notifications[0]?.text).toContain("<b>Members:</b> Bob");
   });
 
   it("limits each chat's message to the events its filters allow", () => {
@@ -203,8 +205,8 @@ describe("routeEventBatch", () => {
 
     expect(notifications).toHaveLength(2);
     const filtered = notifications.find((n) => n.chatId === -200);
-    expect(filtered?.text).toContain("assigned");
-    expect(filtered?.text).not.toContain("created");
+    expect(filtered?.text).toContain("<b>Actions:</b> Assigned");
+    expect(filtered?.text).not.toContain("Created");
   });
 
   it("DMs the mapped member once for a net assignment", () => {
@@ -291,6 +293,6 @@ describe("routeEventBatch", () => {
     );
 
     const group = notifications.find((n) => n.kind === "group");
-    expect(group?.text).toContain("@bob");
+    expect(group?.text).toContain("<b>Members:</b> @bob");
   });
 });

@@ -239,8 +239,8 @@ describe("processEvent", () => {
     // One DM to the assignee plus one combined group message.
     expect(sent.map((message) => message.chatId).sort()).toEqual([-100, 555]);
     const group = sent.find((message) => message.chatId === -100);
-    expect(group?.text).toContain("created");
-    expect(group?.text).toContain("Assigned @bob");
+    expect(group?.text).toContain("<b>Actions:</b> Created, Assigned");
+    expect(group?.text).toContain("<b>Members:</b> @bob");
     expect(await eventRow(createdId)).toMatchObject({
       status: "processed",
       notificationsSent: 2,

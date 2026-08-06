@@ -12,10 +12,6 @@ export interface MemberMention {
   telegramUsername: string | null;
 }
 
-export interface FormatOptions {
-  memberMention?: MemberMention;
-}
-
 export function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -163,79 +159,10 @@ function memberDisplayName(
   return "a member";
 }
 
-function headerLine(
-  payload: KanWebhookPayload,
-  kanBaseUrl: string,
-  options: FormatOptions,
-): string {
-  const actor = `<b>${actorName(payload)}</b>`;
-  const card = cardLink(payload, kanBaseUrl);
-  const list = payload.data.list
-    ? ` in <i>${escapeHtml(payload.data.list.name)}</i>`
-    : "";
-
-  switch (payload.event) {
-    case "card.created":
-      return `🆕 ${actor} created ${card}${list}`;
-    case "card.updated":
-      return `✏️ ${actor} updated ${card}`;
-    case "card.moved":
-      return `📦 ${actor} moved ${card}${list.replace(" in ", " to ")}`;
-    case "card.deleted":
-      return `🗑 ${actor} deleted ${card}`;
-    case "card.comment.created":
-      return `💬 ${actor} commented on ${card}`;
-    case "card.comment.updated":
-      return `💬 ${actor} edited a comment on ${card}`;
-    case "card.comment.deleted":
-      return `💬 ${actor} deleted a comment on ${card}`;
-    case "card.label.added":
-      return `🏷 ${actor} added label ${labelBadge(payload)} to ${card}`;
-    case "card.label.removed":
-      return `🏷 ${actor} removed label ${labelBadge(payload)} from ${card}`;
-    case "card.member.added":
-      return `👤 ${actor} assigned ${memberDisplayName(payload, options.memberMention)} to ${card}`;
-    case "card.member.removed":
-      return `👤 ${actor} removed ${memberDisplayName(payload, options.memberMention)} from ${card}`;
-  }
-}
-
 function labelBadge(payload: KanWebhookPayload): string {
   const { label } = payload.data;
   if (!label) return "<i>unknown</i>";
   return `<b>${escapeHtml(label.name)}</b>`;
-}
-
-/**
- * Render a webhook payload as a Telegram HTML message for subscribed chats.
- */
-export function formatEventMessage(
-  payload: KanWebhookPayload,
-  kanBaseUrl: string,
-  options: FormatOptions = {},
-): string {
-  const lines: string[] = [headerLine(payload, kanBaseUrl, options)];
-
-  const context = contextLine(payload);
-  if (context) lines.push(context);
-
-  if (
-    payload.event === "card.comment.created" ||
-    payload.event === "card.comment.updated"
-  ) {
-    const comment = payload.data.comment;
-    if (comment)
-      lines.push(`<blockquote>${textPreview(comment.text)}</blockquote>`);
-  }
-
-  if (
-    (payload.event === "card.updated" || payload.event === "card.moved") &&
-    payload.data.changes
-  ) {
-    lines.push(...formatChanges(payload.data.changes));
-  }
-
-  return lines.join("\n");
 }
 
 export interface BatchFormatOptions {
@@ -329,6 +256,8 @@ interface BatchSummary {
   deleted: KanWebhookPayload | undefined;
   /** Last card.moved event; its list is the card's current list. */
   moved: KanWebhookPayload | undefined;
+  /** Whether any card.updated event is part of the batch. */
+  updated: boolean;
   /** Field changes merged across card.updated events (first from → last to). */
   changes: KanChanges;
   labels: NetChange[];
@@ -414,16 +343,19 @@ function summarizeCardBatch(
   let created: KanWebhookPayload | undefined;
   let deleted: KanWebhookPayload | undefined;
   let moved: KanWebhookPayload | undefined;
+  let updated = false;
   for (const payload of payloads) {
     if (payload.event === "card.created") created = payload;
     if (payload.event === "card.deleted") deleted = payload;
     if (payload.event === "card.moved") moved = payload;
+    if (payload.event === "card.updated") updated = true;
   }
 
   return {
     created,
     deleted,
     moved,
+    updated,
     changes: mergeChanges(payloads),
     labels: netLabelChanges(payloads),
     members: netMemberChanges(payloads),
@@ -431,16 +363,16 @@ function summarizeCardBatch(
   };
 }
 
-function combinedActor(payloads: readonly KanWebhookPayload[]): string {
+function actorNames(payloads: readonly KanWebhookPayload[]): string {
   const names: string[] = [];
   for (const payload of payloads) {
     const name = payload.data.user?.name ?? "Someone";
     if (!names.includes(name)) names.push(name);
   }
-  if (names.length === 0) return "<b>Someone</b>";
-  if (names.length === 1) return `<b>${escapeHtml(names[0] ?? "Someone")}</b>`;
+  if (names.length === 0) return "Someone";
+  if (names.length === 1) return escapeHtml(names[0] ?? "Someone");
   const last = names.pop() ?? "";
-  return `<b>${names.map(escapeHtml).join(", ")} and ${escapeHtml(last)}</b>`;
+  return `${names.map(escapeHtml).join(", ")} and ${escapeHtml(last)}`;
 }
 
 function finalListName(
@@ -453,14 +385,12 @@ function finalListName(
   return undefined;
 }
 
-function lastContextLine(
+function finalBoardName(
   payloads: readonly KanWebhookPayload[],
 ): string | undefined {
   for (let i = payloads.length - 1; i >= 0; i -= 1) {
-    const payload = payloads[i];
-    if (!payload) continue;
-    const context = contextLine(payload);
-    if (context) return context;
+    const board = payloads[i]?.data.board;
+    if (board) return board.name;
   }
   return undefined;
 }
@@ -474,49 +404,87 @@ function mentionForMemberEvent(
   return options.memberMentionFor(email);
 }
 
-function batchHeaderLine(
-  summary: BatchSummary,
-  actor: string,
-  card: string,
-  listName: string | undefined,
-): string {
-  const inList = listName ? ` in <i>${escapeHtml(listName)}</i>` : "";
-  if (summary.created) return `🆕 ${actor} created ${card}${inList}`;
-  if (summary.moved) {
-    const toList = listName ? ` to <i>${escapeHtml(listName)}</i>` : "";
-    return `📦 ${actor} moved ${card}${toList}`;
-  }
+/** "2026-08-02T10:00:00.000Z" → "2026-08-02 10:00 UTC". */
+function formatUpdatedAt(isoTimestamp: string): string | undefined {
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+function statusEmoji(summary: BatchSummary): string {
+  if (summary.deleted) return "🗑";
+  if (summary.created) return "🆕";
+  if (summary.moved) return "📦";
   const onlyCommentActivity =
-    Object.keys(summary.changes).length === 0 &&
+    !summary.updated &&
     summary.labels.length === 0 &&
     summary.members.length === 0 &&
     (summary.comments.length > 0 || summary.deletedCommentCount > 0);
-  if (onlyCommentActivity) return `💬 ${actor} commented on ${card}`;
-  return `✏️ ${actor} updated ${card}`;
+  return onlyCommentActivity ? "💬" : "✏️";
 }
 
-function batchDetailLines(
+/**
+ * The Actions line names everything that net-happened within the batch,
+ * in lifecycle order.
+ */
+function actionList(summary: BatchSummary): string[] {
+  const actions: string[] = [];
+  if (summary.created) actions.push("Created");
+  if (summary.moved) actions.push("Moved");
+  if (summary.updated) actions.push("Updated");
+  if (summary.labels.some((change) => change.net > 0)) {
+    actions.push("Label added");
+  }
+  if (summary.labels.some((change) => change.net < 0)) {
+    actions.push("Label removed");
+  }
+  if (summary.members.some((change) => change.net > 0)) {
+    actions.push("Assigned");
+  }
+  if (summary.members.some((change) => change.net < 0)) {
+    actions.push("Unassigned");
+  }
+  if (summary.comments.some((comment) => comment.isNew)) {
+    actions.push("Commented");
+  }
+  if (summary.comments.some((comment) => !comment.isNew)) {
+    actions.push("Comment edited");
+  }
+  if (summary.deletedCommentCount > 0) actions.push("Comment deleted");
+  if (summary.deleted) actions.push("Deleted");
+  return actions;
+}
+
+function membersLine(
   summary: BatchSummary,
   options: BatchFormatOptions,
-): string[] {
+): string | undefined {
+  if (summary.members.length === 0) return undefined;
+  const parts = summary.members.map((change) => {
+    const mention = mentionForMemberEvent(change.payload, options);
+    const name = memberDisplayName(change.payload, mention);
+    return change.net > 0 ? name : `${name} (removed)`;
+  });
+  return `<b>Members:</b> ${parts.join(", ")}`;
+}
+
+function labelsLine(summary: BatchSummary): string | undefined {
+  if (summary.labels.length === 0) return undefined;
+  const parts = summary.labels.map((change) => {
+    const badge = labelBadge(change.payload);
+    return change.net > 0 ? badge : `${badge} (removed)`;
+  });
+  return `<b>Labels:</b> ${parts.join(", ")}`;
+}
+
+function detailLines(summary: BatchSummary): string[] {
   const lines: string[] = [];
+  if (summary.deleted) return lines;
 
   // For a card created within the batch the current field values are
   // visible on the card itself; intermediate edits are noise.
   if (!summary.created) {
     lines.push(...formatChanges(summary.changes));
-  }
-
-  for (const change of summary.labels) {
-    const verb = change.net > 0 ? "Added label" : "Removed label";
-    lines.push(`🏷 ${verb} ${labelBadge(change.payload)}`);
-  }
-
-  for (const change of summary.members) {
-    const mention = mentionForMemberEvent(change.payload, options);
-    const name = memberDisplayName(change.payload, mention);
-    const verb = change.net > 0 ? "Assigned" : "Removed";
-    lines.push(`👤 ${verb} ${name}`);
   }
 
   for (const comment of summary.comments) {
@@ -525,24 +493,27 @@ function batchDetailLines(
     lines.push(comment.isNew ? "💬 Commented:" : "💬 Edited a comment:");
     lines.push(`<blockquote>${textPreview(text)}</blockquote>`);
   }
-  if (summary.deletedCommentCount > 0) {
-    lines.push(
-      summary.deletedCommentCount === 1
-        ? "💬 Deleted a comment"
-        : `💬 Deleted ${summary.deletedCommentCount} comments`,
-    );
-  }
 
   return lines;
 }
 
 /**
- * Render a batch of webhook events for one card as a single Telegram HTML
- * message describing the card's resulting state. Actions that cancel out
- * within the batch (member or label added then removed, a field changed
- * back to its old value, a comment created then deleted) are omitted.
- * Returns undefined when everything cancelled out and there is nothing
- * left to say.
+ * Render a batch of webhook events for one card (a batch of one is the
+ * common case) as a single Telegram HTML message describing the card's
+ * resulting state:
+ *
+ *   🆕 Card title: <link>
+ *   Board: …
+ *   Column: …
+ *   Members: …
+ *   Updated at: …
+ *   By: …
+ *   Actions: Created, Assigned, …
+ *
+ * Actions that cancel out within the batch (member or label added then
+ * removed, a field changed back to its old value, a comment created then
+ * deleted) are omitted. Returns undefined when everything cancelled out
+ * and there is nothing left to say.
  */
 export function formatCardBatchMessage(
   payloads: readonly KanWebhookPayload[],
@@ -552,41 +523,36 @@ export function formatCardBatchMessage(
   const first = payloads[0];
   if (!first) return undefined;
 
-  if (payloads.length === 1) {
-    const memberMention = mentionForMemberEvent(first, options);
-    return formatEventMessage(
-      first,
-      kanBaseUrl,
-      memberMention ? { memberMention } : {},
-    );
-  }
-
   const summary = summarizeCardBatch(payloads);
+  const actions = actionList(summary);
+  if (actions.length === 0) return undefined;
+
   const latest = payloads[payloads.length - 1] ?? first;
-  const actor = combinedActor(payloads);
+  // A deleted card's page no longer exists, so show the plain title.
+  const card = summary.deleted
+    ? `<b>${escapeHtml(truncate(latest.data.card.title, 200))}</b>`
+    : cardLink(latest, kanBaseUrl);
 
-  if (summary.deleted) {
-    // The card is gone; whatever else happened first no longer matters.
-    const card = cardLink(summary.deleted, kanBaseUrl);
-    const verb = summary.created ? "created and deleted" : "deleted";
-    const lines = [`🗑 ${actor} ${verb} ${card}`];
-    const context = lastContextLine(payloads);
-    if (context) lines.push(context);
-    return lines.join("\n");
-  }
-
-  const details = batchDetailLines(summary, options);
-  const hasHeaderAction =
-    summary.created !== undefined || summary.moved !== undefined;
-  if (!hasHeaderAction && details.length === 0) return undefined;
-
-  const card = cardLink(latest, kanBaseUrl);
-  const lines = [
-    batchHeaderLine(summary, actor, card, finalListName(payloads)),
+  const lines: string[] = [
+    `${statusEmoji(summary)} <b>Card title:</b> ${card}`,
   ];
-  const context = lastContextLine(payloads);
-  if (context) lines.push(context);
-  lines.push(...details);
+
+  const board = finalBoardName(payloads);
+  if (board) lines.push(`<b>Board:</b> ${escapeHtml(board)}`);
+  const column = finalListName(payloads);
+  if (column) lines.push(`<b>Column:</b> ${escapeHtml(column)}`);
+
+  const members = membersLine(summary, options);
+  if (members) lines.push(members);
+  const labels = labelsLine(summary);
+  if (labels) lines.push(labels);
+
+  const updatedAt = formatUpdatedAt(latest.timestamp);
+  if (updatedAt) lines.push(`<b>Updated at:</b> ${updatedAt}`);
+  lines.push(`<b>By:</b> ${actorNames(payloads)}`);
+  lines.push(`<b>Actions:</b> ${actions.join(", ")}`);
+
+  lines.push(...detailLines(summary));
 
   return lines.join("\n");
 }
