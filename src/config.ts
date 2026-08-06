@@ -77,6 +77,12 @@ const envSchema = z
       .int()
       .min(0)
       .default(600),
+    EVENT_AGGREGATION_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(300)
+      .default(15),
     EVENT_LOG_RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error", "fatal"])
@@ -126,6 +132,13 @@ export interface AppConfig {
   autoApproveLinks: boolean;
   groupMemberMentions: boolean;
   webhookTimestampToleranceSeconds: number;
+  /**
+   * How long to collect webhook events for the same card before rendering
+   * them as one combined message. 0 sends every event separately. Only
+   * effective in persistent mode: serverless instances may be frozen
+   * between requests and cannot hold a timer.
+   */
+  eventAggregationSeconds: number;
   eventLogRetentionDays: number;
   logLevel: "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 }
@@ -177,6 +190,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     groupMemberMentions: parsed.data.GROUP_MEMBER_MENTIONS,
     webhookTimestampToleranceSeconds:
       parsed.data.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
+    eventAggregationSeconds: parsed.data.EVENT_AGGREGATION_SECONDS,
     eventLogRetentionDays: parsed.data.EVENT_LOG_RETENTION_DAYS,
     logLevel: parsed.data.LOG_LEVEL,
   };

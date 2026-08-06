@@ -6,7 +6,7 @@ import * as eventRepo from "../db/repository/event.repo.js";
 import * as mappingRepo from "../db/repository/mapping.repo.js";
 import * as subscriptionRepo from "../db/repository/subscription.repo.js";
 import { NotificationDeliveryError } from "../telegram/notifier.js";
-import { routeEvent } from "./routing.js";
+import { routeEventBatch } from "./routing.js";
 
 /** Minimal notifier contract; satisfied by TelegramNotifier. */
 export interface Notifier {
@@ -54,33 +54,54 @@ async function redeliverToMigratedChat(
   }
 }
 
-async function loadAffectedMemberMapping(
+async function loadAffectedMemberMappings(
   db: DbClient,
-  payload: KanWebhookPayload,
-): Promise<UserMapping | undefined> {
-  const memberEmail = payload.data.member?.email;
-  if (!memberEmail) return undefined;
-  return mappingRepo.getApprovedByEmail(db, memberEmail);
+  payloads: readonly KanWebhookPayload[],
+): Promise<UserMapping[]> {
+  const emails = new Set<string>();
+  for (const payload of payloads) {
+    const memberEmail = payload.data.member?.email;
+    if (memberEmail) emails.add(memberEmail);
+  }
+
+  const mappings: UserMapping[] = [];
+  for (const email of emails) {
+    const mapping = await mappingRepo.getApprovedByEmail(db, email);
+    if (mapping) mappings.push(mapping);
+  }
+  return mappings;
+}
+
+/** A webhook event as stored in the event log, awaiting delivery. */
+export interface StoredEvent {
+  id: number;
+  payload: KanWebhookPayload;
 }
 
 /**
- * Deliver notifications for a stored webhook event and record the outcome
- * on its event_log row. Delivery failures for individual chats are
- * collected instead of aborting the whole event.
+ * Deliver notifications for a batch of stored webhook events concerning
+ * one card and record the outcome on their event_log rows. The batch is
+ * rendered as a single message per chat describing the card's resulting
+ * state. Delivery failures for individual chats are collected instead of
+ * aborting the whole batch.
  */
-export async function processEvent(
+export async function processEventBatch(
   deps: ProcessorDeps,
-  eventLogId: number,
-  payload: KanWebhookPayload,
+  events: readonly StoredEvent[],
 ): Promise<void> {
+  if (events.length === 0) return;
   const { db, notifier, logger, kanBaseUrl } = deps;
 
+  const payloads = events.map((event) => event.payload);
+  const eventLogIds = events.map((event) => event.id);
+  const eventNames = payloads.map((payload) => payload.event);
+
   const subscriptions = await subscriptionRepo.listAll(db);
-  const memberMapping = await loadAffectedMemberMapping(db, payload);
-  const notifications = routeEvent(
-    payload,
+  const memberMappings = await loadAffectedMemberMappings(db, payloads);
+  const notifications = routeEventBatch(
+    payloads,
     subscriptions,
-    memberMapping ? [memberMapping] : [],
+    memberMappings,
     kanBaseUrl,
     { mentionLinkedMembers: deps.groupMemberMentions },
   );
@@ -117,8 +138,8 @@ export async function processEvent(
       failures.push(message);
       logger.error(
         {
-          eventLogId,
-          event: payload.event,
+          eventLogIds,
+          events: eventNames,
           chatId: notification.chatId,
           kind: notification.kind,
           error: message,
@@ -156,14 +177,30 @@ export async function processEvent(
     }
   }
 
+  // The batch produced one set of notifications collectively, so every
+  // row in it records the same outcome and the batch-wide sent count.
   if (failures.length > 0) {
-    await eventRepo.markFailed(db, eventLogId, failures.join("; "), sent);
+    const errorText = failures.join("; ");
+    for (const eventLogId of eventLogIds) {
+      await eventRepo.markFailed(db, eventLogId, errorText, sent);
+    }
     return;
   }
 
-  await eventRepo.markProcessed(db, eventLogId, sent);
+  for (const eventLogId of eventLogIds) {
+    await eventRepo.markProcessed(db, eventLogId, sent);
+  }
   logger.info(
-    { eventLogId, event: payload.event, notificationsSent: sent },
-    "Webhook event processed",
+    { eventLogIds, events: eventNames, notificationsSent: sent },
+    "Webhook events processed",
   );
+}
+
+/** Single-event convenience wrapper around processEventBatch. */
+export async function processEvent(
+  deps: ProcessorDeps,
+  eventLogId: number,
+  payload: KanWebhookPayload,
+): Promise<void> {
+  await processEventBatch(deps, [{ id: eventLogId, payload }]);
 }

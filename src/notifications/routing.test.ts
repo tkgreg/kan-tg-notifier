@@ -6,7 +6,7 @@ import {
   buildSubscription,
   TEST_KAN_BASE_URL,
 } from "../test-utils/fixtures.js";
-import { matchesSubscription, routeEvent } from "./routing.js";
+import { matchesSubscription, routeEvent, routeEventBatch } from "./routing.js";
 
 describe("matchesSubscription", () => {
   it("matches any event when allEvents is set", () => {
@@ -16,7 +16,10 @@ describe("matchesSubscription", () => {
   });
 
   it("matches only listed events otherwise", () => {
-    const sub = buildSubscription({ allEvents: false, events: ["card.created"] });
+    const sub = buildSubscription({
+      allEvents: false,
+      events: ["card.created"],
+    });
     expect(matchesSubscription(sub, buildPayload("card.created"))).toBe(true);
     expect(matchesSubscription(sub, buildPayload("card.deleted"))).toBe(false);
   });
@@ -26,7 +29,9 @@ describe("matchesSubscription", () => {
     expect(matchesSubscription(sub, buildPayload("card.created"))).toBe(false);
 
     const matching = buildSubscription({ boardPublicIds: ["board1234567"] });
-    expect(matchesSubscription(matching, buildPayload("card.created"))).toBe(true);
+    expect(matchesSubscription(matching, buildPayload("card.created"))).toBe(
+      true,
+    );
   });
 });
 
@@ -34,8 +39,18 @@ describe("routeEvent", () => {
   it("notifies every matching subscription", () => {
     const subs = [
       buildSubscription({ id: 1, chatId: -100 }),
-      buildSubscription({ id: 2, chatId: -200, allEvents: false, events: ["card.created"] }),
-      buildSubscription({ id: 3, chatId: -300, allEvents: false, events: ["card.deleted"] }),
+      buildSubscription({
+        id: 2,
+        chatId: -200,
+        allEvents: false,
+        events: ["card.created"],
+      }),
+      buildSubscription({
+        id: 3,
+        chatId: -300,
+        allEvents: false,
+        events: ["card.deleted"],
+      }),
     ];
     const notifications = routeEvent(
       buildPayload("card.created"),
@@ -89,7 +104,7 @@ describe("routeEvent", () => {
       { mentionLinkedMembers: false },
     );
     const group = notifications.find((n) => n.chatId === -100);
-    expect(group?.text).toContain("assigned Bob to");
+    expect(group?.text).toContain("<b>Members:</b> Bob");
     expect(group?.text).not.toContain("@bob_tg");
   });
 
@@ -142,5 +157,142 @@ describe("routeEvent", () => {
     expect(
       routeEvent(buildPayload("card.created"), [], [], TEST_KAN_BASE_URL),
     ).toEqual([]);
+  });
+});
+
+describe("routeEventBatch", () => {
+  it("sends one combined group message for a batch", () => {
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+
+    const notifications = routeEventBatch(
+      [created, assigned],
+      [buildSubscription({ chatId: -100 })],
+      [],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.chatId).toBe(-100);
+    expect(notifications[0]?.text).toContain(
+      "<b>Actions:</b> Created, Assigned",
+    );
+    expect(notifications[0]?.text).toContain("<b>Members:</b> Bob");
+  });
+
+  it("limits each chat's message to the events its filters allow", () => {
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+
+    const notifications = routeEventBatch(
+      [created, assigned],
+      [
+        buildSubscription({ chatId: -100 }),
+        buildSubscription({
+          id: 2,
+          chatId: -200,
+          allEvents: false,
+          events: ["card.member.added"],
+        }),
+      ],
+      [],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications).toHaveLength(2);
+    const filtered = notifications.find((n) => n.chatId === -200);
+    expect(filtered?.text).toContain("<b>Actions:</b> Assigned");
+    expect(filtered?.text).not.toContain("Created");
+  });
+
+  it("DMs the mapped member once for a net assignment", () => {
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+
+    const notifications = routeEventBatch(
+      [created, assigned],
+      [],
+      [buildMapping()],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({ chatId: 555, kind: "direct" });
+    expect(notifications[0]?.text).toContain("assigned you to");
+  });
+
+  it("does not DM a member whose add and remove cancelled out", () => {
+    const member = { id: "membr1234567", name: "Bob", email: "bob@corp.com" };
+    const added = buildPayload("card.member.added", { member });
+    const removed = buildPayload("card.member.removed", { member });
+
+    const notifications = routeEventBatch(
+      [added, removed],
+      [],
+      [buildMapping()],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications).toEqual([]);
+  });
+
+  it("sends no group message when the batch cancelled out", () => {
+    const label = { id: "label1234567", name: "Bug", colourCode: "#f00" };
+    const added = buildPayload("card.label.added", { label });
+    const removed = buildPayload("card.label.removed", { label });
+
+    const notifications = routeEventBatch(
+      [added, removed],
+      [buildSubscription({ chatId: -100 })],
+      [],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications).toEqual([]);
+  });
+
+  it("replaces the group message with the DM for the member's own chat", () => {
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+
+    const notifications = routeEventBatch(
+      [created, assigned],
+      [
+        buildSubscription({ chatId: 555, chatType: "private" }),
+        buildSubscription({ id: 2, chatId: -100 }),
+      ],
+      [buildMapping()],
+      TEST_KAN_BASE_URL,
+    );
+
+    expect(notifications.map((n) => [n.chatId, n.kind])).toEqual([
+      [555, "direct"],
+      [-100, "group"],
+    ]);
+  });
+
+  it("mentions the linked member in the combined group message", () => {
+    const created = buildPayload("card.created");
+    const assigned = buildPayload("card.member.added", {
+      member: { id: "membr1234567", name: "Bob", email: "bob@corp.com" },
+    });
+
+    const notifications = routeEventBatch(
+      [created, assigned],
+      [buildSubscription({ chatId: -100 })],
+      [buildMapping()],
+      TEST_KAN_BASE_URL,
+    );
+
+    const group = notifications.find((n) => n.kind === "group");
+    expect(group?.text).toContain("<b>Members:</b> @bob");
   });
 });

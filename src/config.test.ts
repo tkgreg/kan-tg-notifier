@@ -22,6 +22,7 @@ describe("loadConfig", () => {
     expect(config.autoApproveLinks).toBe(false);
     expect(config.groupMemberMentions).toBe(true);
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
+    expect(config.eventAggregationSeconds).toBe(15);
     expect(config.eventLogRetentionDays).toBe(30);
     expect(config.logLevel).toBe("info");
     expect(config.runtimeMode).toBe("persistent");
@@ -39,6 +40,16 @@ describe("loadConfig", () => {
     expect(config.host).toBe("0.0.0.0");
     expect(config.publicUrl).toBeUndefined();
     expect(config.adminTelegramIds).toEqual([]);
+  });
+
+  it("parses EVENT_AGGREGATION_SECONDS and rejects negative values", () => {
+    expect(
+      loadConfig({ ...validEnv, EVENT_AGGREGATION_SECONDS: "0" })
+        .eventAggregationSeconds,
+    ).toBe(0);
+    expect(() =>
+      loadConfig({ ...validEnv, EVENT_AGGREGATION_SECONDS: "-1" }),
+    ).toThrow(ConfigError);
   });
 
   it("parses RUN_MIGRATIONS", () => {
