@@ -23,6 +23,7 @@ describe("loadConfig", () => {
     expect(config.groupMemberMentions).toBe(true);
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
     expect(config.eventAggregationSeconds).toBe(15);
+    expect(config.messageUpdateWindowSeconds).toBe(600);
     expect(config.eventLogRetentionDays).toBe(30);
     expect(config.logLevel).toBe("info");
     expect(config.runtimeMode).toBe("persistent");

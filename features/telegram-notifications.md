@@ -6,6 +6,10 @@ Turns stored webhook events into Telegram messages.
 
 Kan emits one webhook per elementary action, so a single user gesture (create a card, assign a member) arrives as several deliveries within moments. In persistent mode, events for the same card (keyed by `card.publicId`) are collected for `EVENT_AGGREGATION_SECONDS` (default 15, `0` disables) after the first one arrives — a fixed window, not a sliding one, so latency is bounded — and then processed as one batch. Shutdown flushes pending batches before the queue drains. Serverless mode processes each event immediately: an instance may be frozen between requests and cannot hold a timer.
 
+## Message updates (`src/notifications/threads.ts`)
+
+Events that arrive after a card's message already went out (e.g. the member is assigned half a minute after the card was created) do not post a second message: an in-memory thread registry remembers, per card, the events already rendered and the Telegram message id posted per chat. A later batch re-renders the accumulated state and **edits the existing message in place** (`editMessageText`), so each chat keeps one message per card showing its current state. A thread expires `MESSAGE_UPDATE_WINDOW_SECONDS` (default 600, `0` disables) after its last update; after that a new message is posted. Direct messages are derived from the new events only and never repeat. If an edit fails (message deleted, too old), a fresh message is posted instead. The registry is process-local: in serverless mode it only spans one instance's lifetime, so late events may fall back to new messages.
+
 ## Routing (`src/notifications/routing.ts`, pure)
 
 For each batch (a batch of one is the common case):

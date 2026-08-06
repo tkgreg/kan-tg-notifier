@@ -53,7 +53,11 @@ function decideRetry(error: unknown, attempt: number): RetryDecision {
       if (retryAfter > MAX_FLOOD_WAIT_SECONDS) {
         return { retry: false, delayMs: 0, unreachableChat: false };
       }
-      return { retry: true, delayMs: retryAfter * 1000, unreachableChat: false };
+      return {
+        retry: true,
+        delayMs: retryAfter * 1000,
+        unreachableChat: false,
+      };
     }
     if (error.error_code === 403) {
       return { retry: false, delayMs: 0, unreachableChat: true };
@@ -72,6 +76,14 @@ function decideRetry(error: unknown, attempt: number): RetryDecision {
   return { retry: false, delayMs: 0, unreachableChat: false };
 }
 
+function isMessageNotModified(error: unknown): boolean {
+  return (
+    error instanceof NotificationDeliveryError &&
+    error.cause instanceof GrammyError &&
+    error.cause.description.includes("message is not modified")
+  );
+}
+
 /**
  * Connector to the Telegram Bot API for outgoing notifications.
  * Retries flood-wait (429), server (5xx) and network errors with warnings,
@@ -86,16 +98,47 @@ export class TelegramNotifier {
     this.logger = logger;
   }
 
-  async sendHtmlMessage(chatId: number, text: string): Promise<void> {
+  /** Send a message; resolves with the new Telegram message id. */
+  async sendHtmlMessage(chatId: number, text: string): Promise<number> {
+    const message = await this.withRetries(chatId, "send", () =>
+      this.api.sendMessage(chatId, text, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+    return message.message_id;
+  }
+
+  /** Replace the text of a previously sent message in place. */
+  async editHtmlMessage(
+    chatId: number,
+    messageId: number,
+    text: string,
+  ): Promise<void> {
+    try {
+      await this.withRetries(chatId, "edit", () =>
+        this.api.editMessageText(chatId, messageId, text, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        }),
+      );
+    } catch (error) {
+      // Re-rendering identical content is not a failure.
+      if (isMessageNotModified(error)) return;
+      throw error;
+    }
+  }
+
+  private async withRetries<T>(
+    chatId: number,
+    action: "send" | "edit",
+    operation: () => Promise<T>,
+  ): Promise<T> {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       try {
-        await this.api.sendMessage(chatId, text, {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
-        return;
+        return await operation();
       } catch (error) {
         lastError = error;
 
@@ -120,7 +163,7 @@ export class TelegramNotifier {
 
         if (!decision.retry || attempt === MAX_ATTEMPTS) {
           throw new NotificationDeliveryError(
-            `Failed to send Telegram message to chat ${chatId} after ${attempt} attempt(s): ${
+            `Failed to ${action} Telegram message for chat ${chatId} after ${attempt} attempt(s): ${
               error instanceof Error ? error.message : String(error)
             }`,
             {
@@ -135,12 +178,13 @@ export class TelegramNotifier {
         this.logger.warn(
           {
             chatId,
+            action,
             attempt,
             maxAttempts: MAX_ATTEMPTS,
             delayMs: decision.delayMs,
             error: error instanceof Error ? error.message : String(error),
           },
-          "Telegram send failed, retrying",
+          "Telegram request failed, retrying",
         );
         await sleep(decision.delayMs);
       }
@@ -148,7 +192,7 @@ export class TelegramNotifier {
 
     // Unreachable: the loop either returns or throws on the last attempt.
     throw new NotificationDeliveryError(
-      `Failed to send Telegram message to chat ${chatId}`,
+      `Failed to ${action} Telegram message for chat ${chatId}`,
       {
         chatId,
         attempts: MAX_ATTEMPTS,

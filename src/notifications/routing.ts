@@ -47,30 +47,16 @@ function findApprovedMapping(
 }
 
 /**
- * Decide which Telegram chats must be notified about a batch of webhook
- * events concerning one card (a batch of one is the common case).
- *
- * Rules:
- * - Every subscription matching the event and board filters gets one
- *   group message summarizing the events that passed its filters. When
- *   an affected member has an approved mapping and mentionLinkedMembers
- *   is on, the message mentions their concrete Telegram account instead
- *   of the Kan (OIDC) name.
- * - Members whose net assignment changed (added or removed overall, after
- *   cancelling an add+remove pair within the batch) and who have an
- *   approved mapping get a personalized direct message instead of —
- *   never in addition to — the generic one.
+ * Personal direct messages for members whose net assignment changed
+ * within the batch (an add+remove pair cancels out) and who have an
+ * approved mapping.
  */
-export function routeEventBatch(
+export function routeDirectMessages(
   payloads: readonly KanWebhookPayload[],
-  subscriptions: readonly ChatSubscription[],
   approvedMappings: readonly UserMapping[],
   kanBaseUrl: string,
-  options: RoutingOptions = { mentionLinkedMembers: true },
 ): Notification[] {
   const notifications: Notification[] = [];
-  const directChatIds = new Set<number>();
-
   for (const change of netMemberChanges(payloads)) {
     const mapping = findApprovedMapping(
       change.payload.data.member?.email,
@@ -82,8 +68,25 @@ export function routeEventBatch(
       text: formatMemberDirectMessage(change.payload, kanBaseUrl),
       kind: "direct",
     });
-    directChatIds.add(mapping.telegramUserId);
   }
+  return notifications;
+}
+
+/**
+ * One card-state message per subscription whose event and board filters
+ * match at least one event of the batch, each covering only the events
+ * that passed that chat's filters. Chats in excludeChatIds (typically
+ * chats receiving a personal DM instead) are skipped.
+ */
+export function routeGroupMessages(
+  payloads: readonly KanWebhookPayload[],
+  subscriptions: readonly ChatSubscription[],
+  approvedMappings: readonly UserMapping[],
+  kanBaseUrl: string,
+  options: RoutingOptions = { mentionLinkedMembers: true },
+  excludeChatIds: ReadonlySet<number> = new Set(),
+): Notification[] {
+  const notifications: Notification[] = [];
 
   const memberMentionFor = options.mentionLinkedMembers
     ? (email: string): MemberMention | undefined => {
@@ -100,7 +103,7 @@ export function routeEventBatch(
   // subsets; identical subsets share one formatted message.
   const textBySubset = new Map<string, string | undefined>();
   for (const subscription of subscriptions) {
-    if (directChatIds.has(subscription.chatId)) continue;
+    if (excludeChatIds.has(subscription.chatId)) continue;
 
     const includedIndexes: number[] = [];
     payloads.forEach((payload, index) => {
@@ -136,6 +139,49 @@ export function routeEventBatch(
   }
 
   return notifications;
+}
+
+/**
+ * Decide which Telegram chats must be notified about a batch of webhook
+ * events concerning one card (a batch of one is the common case).
+ *
+ * Rules:
+ * - Every subscription matching the event and board filters gets one
+ *   group message summarizing the events that passed its filters. When
+ *   an affected member has an approved mapping and mentionLinkedMembers
+ *   is on, the message mentions their concrete Telegram account instead
+ *   of the Kan (OIDC) name.
+ * - Members whose net assignment changed (added or removed overall, after
+ *   cancelling an add+remove pair within the batch) and who have an
+ *   approved mapping get a personalized direct message instead of —
+ *   never in addition to — the generic one.
+ */
+export function routeEventBatch(
+  payloads: readonly KanWebhookPayload[],
+  subscriptions: readonly ChatSubscription[],
+  approvedMappings: readonly UserMapping[],
+  kanBaseUrl: string,
+  options: RoutingOptions = { mentionLinkedMembers: true },
+): Notification[] {
+  const directMessages = routeDirectMessages(
+    payloads,
+    approvedMappings,
+    kanBaseUrl,
+  );
+  const directChatIds = new Set(
+    directMessages.map((notification) => notification.chatId),
+  );
+  return [
+    ...directMessages,
+    ...routeGroupMessages(
+      payloads,
+      subscriptions,
+      approvedMappings,
+      kanBaseUrl,
+      options,
+      directChatIds,
+    ),
+  ];
 }
 
 /** Single-event convenience wrapper around routeEventBatch. */
