@@ -39,6 +39,26 @@ const adminIdsFromString = z
   )
   .pipe(z.array(z.coerce.number().int()));
 
+const pulseChatIdsFromString = z
+  .string()
+  .transform((value) =>
+    value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean),
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .regex(/^-[1-9]\d*$/)
+          .transform(Number)
+          .pipe(z.number().int().safe().negative()),
+      )
+      .max(100),
+  );
+
 const stripTrailingSlashes = (value: string): string =>
   value.replace(/\/+$/, "");
 
@@ -70,6 +90,7 @@ const envSchema = z
     HOST: z.string().default("0.0.0.0"),
     PORT: z.coerce.number().int().min(1).max(65535).default(8080),
     ADMIN_TELEGRAM_IDS: adminIdsFromString.default(""),
+    PULSE_TELEGRAM_CHAT_IDS: pulseChatIdsFromString.default(""),
     AUTO_APPROVE_LINKS: booleanFromString.default("false"),
     GROUP_MEMBER_MENTIONS: booleanFromString.default("true"),
     WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: z.coerce
@@ -89,6 +110,16 @@ const envSchema = z
       .default("info"),
   })
   .superRefine((env, ctx) => {
+    if (
+      env.PULSE_TELEGRAM_CHAT_IDS.length > 0 &&
+      env.RUNTIME_MODE !== "serverless"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["PULSE_TELEGRAM_CHAT_IDS"],
+        message: "Pulse capture requires RUNTIME_MODE=serverless",
+      });
+    }
     if (env.RUNTIME_MODE !== "serverless") return;
 
     if (env.PUBLIC_URL === undefined) {
@@ -129,6 +160,8 @@ export interface AppConfig {
   host: string;
   port: number;
   adminTelegramIds: readonly number[];
+  /** Empty disables capture. Only these group/supergroup IDs are persisted. */
+  pulseTelegramChatIds: readonly number[];
   autoApproveLinks: boolean;
   groupMemberMentions: boolean;
   webhookTimestampToleranceSeconds: number;
@@ -187,6 +220,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     host: parsed.data.HOST,
     port: parsed.data.PORT,
     adminTelegramIds: parsed.data.ADMIN_TELEGRAM_IDS,
+    pulseTelegramChatIds: [...new Set(parsed.data.PULSE_TELEGRAM_CHAT_IDS)],
     autoApproveLinks: parsed.data.AUTO_APPROVE_LINKS,
     groupMemberMentions: parsed.data.GROUP_MEMBER_MENTIONS,
     webhookTimestampToleranceSeconds:

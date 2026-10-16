@@ -19,6 +19,7 @@ describe("loadConfig", () => {
     expect(config.port).toBe(8080);
     expect(config.host).toBe("0.0.0.0");
     expect(config.adminTelegramIds).toEqual([]);
+    expect(config.pulseTelegramChatIds).toEqual([]);
     expect(config.autoApproveLinks).toBe(false);
     expect(config.groupMemberMentions).toBe(true);
     expect(config.webhookTimestampToleranceSeconds).toBe(600);
@@ -105,6 +106,28 @@ describe("loadConfig", () => {
   it("rejects a non-numeric admin id", () => {
     expect(() =>
       loadConfig({ ...validEnv, ADMIN_TELEGRAM_IDS: "111,abc" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("requires an explicit negative group allowlist and webhook runtime for Pulse", () => {
+    const enabled = {
+      ...validEnv,
+      RUNTIME_MODE: "serverless",
+      PUBLIC_URL: "https://bot.example.com",
+    };
+    expect(
+      loadConfig({
+        ...enabled,
+        PULSE_TELEGRAM_CHAT_IDS: "-100123, -100123, -123",
+      }).pulseTelegramChatIds,
+    ).toEqual([-100123, -123]);
+    for (const ids of ["123", "all", "-9007199254740993", "-1e3"]) {
+      expect(() =>
+        loadConfig({ ...enabled, PULSE_TELEGRAM_CHAT_IDS: ids }),
+      ).toThrow(ConfigError);
+    }
+    expect(() =>
+      loadConfig({ ...validEnv, PULSE_TELEGRAM_CHAT_IDS: "-100123" }),
     ).toThrow(ConfigError);
   });
 

@@ -30,9 +30,12 @@ async function main(): Promise<void> {
   const url = `${config.publicUrl}${TELEGRAM_WEBHOOK_PATH}`;
   await bot.api.setWebhook(url, {
     secret_token: config.telegramWebhookSecret,
-    // The bot only reacts to commands and chat migrations, both of which
-    // are message updates. Anything else would just be dropped.
-    allowed_updates: ["message"],
+    // Keep command delivery; only an explicitly enabled inbox needs edits.
+    allowed_updates:
+      config.pulseTelegramChatIds.length > 0
+        ? ["message", "edited_message"]
+        : ["message"],
+    drop_pending_updates: false,
   });
   await publishBotCommands(bot);
 

@@ -100,3 +100,42 @@ export const eventLog = pgTable(
 );
 
 export type EventLogEntry = typeof eventLog.$inferSelect;
+
+/** Minimal, allowlisted group-message inbox for the read-only Pulse collector. */
+export const pulseTelegramInbox = pgTable(
+  "pulse_telegram_inbox",
+  {
+    id: bigserial("id", { mode: "bigint" }).primaryKey(),
+    botId: bigint("bot_id", { mode: "number" }).notNull(),
+    updateId: bigint("update_id", { mode: "number" }).notNull(),
+    chatId: bigint("chat_id", { mode: "number" }).notNull(),
+    messageId: bigint("message_id", { mode: "number" }).notNull(),
+    updateType: varchar("update_type", { length: 32 }).notNull(),
+    chatTitle: text("chat_title").notNull(),
+    chatUsername: varchar("chat_username", { length: 255 }),
+    authorId: bigint("author_id", { mode: "number" }),
+    authorUsername: varchar("author_username", { length: 255 }),
+    messageThreadId: bigint("message_thread_id", { mode: "number" }),
+    body: text("body").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("pulse_telegram_inbox_bot_update_idx").on(
+      table.botId,
+      table.updateId,
+    ),
+    index("pulse_telegram_inbox_bot_id_idx").on(table.botId, table.id),
+    index("pulse_telegram_inbox_revision_idx").on(
+      table.botId,
+      table.chatId,
+      table.messageId,
+      table.occurredAt,
+      table.updateId,
+    ),
+  ],
+);
+
+export type NewPulseTelegramMessage = typeof pulseTelegramInbox.$inferInsert;

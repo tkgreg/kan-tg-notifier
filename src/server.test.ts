@@ -242,10 +242,14 @@ describe("telegram update route", () => {
   let server: FastifyInstance;
   let handled: unknown[];
   let handlerError: Error | undefined;
+  let captured: unknown[];
+  let captureError: Error | undefined;
 
   beforeEach(() => {
     handled = [];
     handlerError = undefined;
+    captured = [];
+    captureError = undefined;
     server = createWebhookServer({
       webhookSecret: SECRET,
       timestampToleranceSeconds: 0,
@@ -254,6 +258,11 @@ describe("telegram update route", () => {
       telegramUpdates: {
         path: PATH,
         secretToken: SECRET_TOKEN,
+        captureUpdate: (update) => {
+          if (captureError) return Promise.reject(captureError);
+          captured.push(update);
+          return Promise.resolve();
+        },
         handleUpdate: (update) => {
           if (handlerError) return Promise.reject(handlerError);
           handled.push(update);
@@ -287,6 +296,7 @@ describe("telegram update route", () => {
     const response = await post();
 
     expect(response.statusCode).toBe(200);
+    expect(captured).toEqual([{ update_id: 1 }]);
     expect(handled).toEqual([{ update_id: 1 }]);
   });
 
@@ -296,6 +306,7 @@ describe("telegram update route", () => {
     });
 
     expect(response.statusCode).toBe(401);
+    expect(captured).toHaveLength(0);
     expect(handled).toHaveLength(0);
   });
 
@@ -315,6 +326,65 @@ describe("telegram update route", () => {
     const response = await post({}, "{not json");
     expect(response.statusCode).toBe(400);
     expect(handled).toHaveLength(0);
+  });
+
+  it("returns 503 before commands when durable capture fails, allowing Telegram retry", async () => {
+    captureError = new Error("database unavailable");
+    const response = await post();
+    expect(response.statusCode).toBe(503);
+    expect(handled).toHaveLength(0);
+    expect(response.body).not.toContain("database unavailable");
+    captureError = undefined;
+    expect((await post()).statusCode).toBe(200);
+    expect(handled).toEqual([{ update_id: 1 }]);
+  });
+
+  it("waits for capture to commit before handling commands or acknowledging", async () => {
+    let commit: () => void = () => {};
+    let started: () => void = () => {};
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const commitPromise = new Promise<void>((resolve) => {
+      commit = resolve;
+    });
+    let commandHandled = false;
+    const waiting = createWebhookServer({
+      webhookSecret: SECRET,
+      timestampToleranceSeconds: 0,
+      logger: createSilentLogger(),
+      onEvent: () => Promise.resolve("accepted"),
+      telegramUpdates: {
+        path: PATH,
+        secretToken: SECRET_TOKEN,
+        captureUpdate: async () => {
+          started();
+          await commitPromise;
+        },
+        handleUpdate: async () => {
+          commandHandled = true;
+        },
+      },
+    });
+    let acknowledged = false;
+    const response = waiting
+      .inject({
+        method: "POST",
+        url: PATH,
+        payload: { update_id: 1 },
+        headers: { "x-telegram-bot-api-secret-token": SECRET_TOKEN },
+      })
+      .then((value) => {
+        acknowledged = true;
+        return value;
+      });
+    await startedPromise;
+    expect(commandHandled).toBe(false);
+    expect(acknowledged).toBe(false);
+    commit();
+    expect((await response).statusCode).toBe(200);
+    expect(commandHandled).toBe(true);
+    await waiting.close();
   });
 
   // Telegram retries a failed delivery for up to 24h, so a permanently

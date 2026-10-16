@@ -19,6 +19,7 @@ import { createSerialQueue } from "./notifications/queue.js";
 import { createWebhookServer } from "./server.js";
 import { createBot, publishBotCommands } from "./telegram/bot.js";
 import { TelegramNotifier } from "./telegram/notifier.js";
+import { capturePulseUpdate } from "./telegram/pulse-inbox.js";
 
 const RECOVERY_BATCH_SIZE = 500;
 /**
@@ -276,6 +277,13 @@ async function runServerless(runtime: Runtime): Promise<void> {
     telegramUpdates: {
       path: TELEGRAM_WEBHOOK_PATH,
       secretToken: config.telegramWebhookSecret,
+      captureUpdate: (update) =>
+        capturePulseUpdate(
+          db,
+          update,
+          bot.botInfo.id,
+          config.pulseTelegramChatIds,
+        ),
       handleUpdate: async (update) => {
         await bot.handleUpdate(update as Update);
         await runMaintenanceOnce();

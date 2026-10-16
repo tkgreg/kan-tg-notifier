@@ -28,6 +28,8 @@ export interface TelegramUpdatesDeps {
   path: string;
   /** Expected X-Telegram-Bot-Api-Secret-Token value. */
   secretToken: string;
+  /** Optional durable capture; a failure must be retried before commands run. */
+  captureUpdate?: (update: unknown) => Promise<void>;
   handleUpdate: (update: unknown) => Promise<void>;
 }
 
@@ -100,6 +102,18 @@ export function createWebhookServer(deps: WebhookServerDeps): FastifyInstance {
         update = JSON.parse(rawBody.toString("utf8"));
       } catch {
         return reply.code(400).send({ error: "Body is not valid JSON" });
+      }
+
+      try {
+        await telegram.captureUpdate?.(update);
+      } catch {
+        // Do not log request bodies or database errors, which can contain text.
+        deps.logger.error(
+          "Telegram inbox persistence failed; delivery will be retried",
+        );
+        return reply
+          .code(503)
+          .send({ error: "Update persistence unavailable" });
       }
 
       try {
