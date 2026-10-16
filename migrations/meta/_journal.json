@@ -8,6 +8,20 @@
       "when": 1785661644479,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792143894531,
+      "tag": "0001_pulse_telegram_inbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792144341232,
+      "tag": "0002_pulse_telegram_inbox_revision_index",
+      "breakpoints": true
     }
   ]
 }

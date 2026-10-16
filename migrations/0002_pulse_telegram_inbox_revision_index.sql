@@ -1,0 +1,1 @@
+CREATE INDEX "pulse_telegram_inbox_revision_idx" ON "pulse_telegram_inbox" USING btree ("bot_id","chat_id","message_id","occurred_at","update_id");
